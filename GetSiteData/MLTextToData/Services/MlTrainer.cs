@@ -54,6 +54,15 @@ public class MlTrainer
         var pipeline = _ml.Transforms.Text.FeaturizeText("Features", nameof(TrainingRow.Text))
             .Append(_ml.BinaryClassification.Trainers.SdcaLogisticRegression());
 
+        // Честная оценка качества: обучаем на 80 %, метрики считаем на отложенных 20 %,
+        // затем итоговую модель обучаем на всей выборке.
+        var split = _ml.Data.TrainTestSplit(data, testFraction: 0.2, seed: 42);
+        var evalModel = pipeline.Fit(split.TrainSet);
+        var metrics = _ml.BinaryClassification.Evaluate(evalModel.Transform(split.TestSet));
+        GetSiteData.Common.Log.Info(
+            $"Метрики на отложенных 20 %: Accuracy={metrics.Accuracy:P2}, AUC={metrics.AreaUnderRocCurve:P2}, " +
+            $"F1={metrics.F1Score:P2}, Precision={metrics.PositivePrecision:P2}, Recall={metrics.PositiveRecall:P2}");
+
         var model = pipeline.Fit(data);
         _ml.Model.Save(model, data.Schema, _modelPath);
     }

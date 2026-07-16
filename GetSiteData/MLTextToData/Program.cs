@@ -57,7 +57,18 @@ switch (command)
         await processCmd.RunAsync();
         break;
 
+    // label <каталог> <cells|other> — массовая разметка обучающей выборки
+    case "label":
+        if (args.Length < 3 || (args[2] != "cells" && args[2] != "other"))
+        {
+            Log.Error("Использование: label <каталог> <cells|other>");
+            break;
+        }
+
+        await new LabelCommand(hashService, repo).RunAsync(args[1], args[2] == "cells");
+        break;
+
     default:
-        Log.Info("Команды: train | process");
+        Log.Info("Команды: train | process | label <каталог> <cells|other>");
         break;
 }
