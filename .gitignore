@@ -21,3 +21,7 @@ OutputErrors/
 
 # Служебное
 .claude/
+
+# Python
+__pycache__/
+*.pyc
