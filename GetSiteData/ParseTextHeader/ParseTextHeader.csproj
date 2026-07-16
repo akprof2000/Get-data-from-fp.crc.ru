@@ -30,11 +30,21 @@
     <Content Include="..\CopyToCh\requirements.txt" Link="requirements.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <!-- Скрипты запуска всей цепочки этапов (1-4) одной командой. -->
-    <Content Include="..\run-pipeline.cmd" Link="run-pipeline.cmd">
+  </ItemGroup>
+
+  <!-- Скрипт запуска всей цепочки этапов (1-4) одной командой: в сборку попадает
+       только «свой» — .cmd для Windows, .sh для Linux/macOS. Целевую ОС берём из
+       RuntimeIdentifier, а при сборке без него (dotnet build) — из текущей ОС. -->
+  <PropertyGroup>
+    <_PipelineTargetsWindows Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier.StartsWith('win'))</_PipelineTargetsWindows>
+    <_PipelineTargetsWindows Condition="'$(RuntimeIdentifier)' == ''">$([MSBuild]::IsOSPlatform('Windows'))</_PipelineTargetsWindows>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="..\run-pipeline.cmd" Link="run-pipeline.cmd" Condition="'$(_PipelineTargetsWindows)' == 'true'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\run-pipeline.sh" Link="run-pipeline.sh">
+    <Content Include="..\run-pipeline.sh" Link="run-pipeline.sh" Condition="'$(_PipelineTargetsWindows)' != 'true'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
