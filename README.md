@@ -62,6 +62,8 @@ flowchart TB
 ├── MLTextToData.exe       3️⃣ классификация
 ├── ParseTextHeader.exe    4️⃣ извлечение
 ├── appsettings.json       ⚙️ общие настройки (секция на этап)
+├── run-pipeline.cmd       ▶️ запуск всех этапов подряд (Windows)
+├── run-pipeline.sh        ▶️ запуск всех этапов подряд (Linux)
 ├── json_to_clickhouse.py  5️⃣ загрузка JSON в ClickHouse (необязательно)
 ├── requirements.txt       🐍 зависимость скрипта (clickhouse-driver)
 └── data/
@@ -222,12 +224,20 @@ python json_to_clickhouse.py --input-dir OutputJson --host localhost --database 
 # 1. Настроить период и термины (секция GetSiteData)
 notepad appsettings.json
 
-# 2. Запустить конвейер по этапам
+# 2. Запустить весь конвейер одной командой
+.\run-pipeline.cmd
+```
+
+▶️ `run-pipeline.cmd` последовательно вызывает все четыре этапа и **останавливается на первой же ошибке**, не запуская следующие. Можно и по одному:
+
+```powershell
 .\GetSiteData.exe          # 🌐 → output/
 .\ParseHTML.exe            # 📄 → documents/
 .\MLTextToData.exe process # 🧠 → cells/ + other/
 .\ParseTextHeader.exe      # 📦 → OutputJson/ + OutputErrors/
+```
 
+```powershell
 # 3. (необязательно) залить результат в ClickHouse
 pip install -r requirements.txt
 python json_to_clickhouse.py --input-dir OutputJson
@@ -243,12 +253,20 @@ tar xzf GetDataFpCrcRu-v1.1.0-standalone-linux-x64.tar.gz
 # 1. Настроить период и термины (секция GetSiteData)
 nano appsettings.json
 
-# 2. Запустить конвейер по этапам
+# 2. Запустить весь конвейер одной командой
+./run-pipeline.sh
+```
+
+▶️ `run-pipeline.sh` последовательно вызывает все четыре этапа и **останавливается на первой же ошибке**, не запуская следующие. Можно и по одному:
+
+```bash
 ./GetSiteData             # 🌐 → output/
 ./ParseHTML               # 📄 → documents/
 ./MLTextToData process    # 🧠 → cells/ + other/
 ./ParseTextHeader         # 📦 → OutputJson/ + OutputErrors/
+```
 
+```bash
 # 3. (необязательно) залить результат в ClickHouse
 pip install -r requirements.txt
 python3 json_to_clickhouse.py --input-dir OutputJson

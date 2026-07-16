@@ -30,6 +30,13 @@
     <Content Include="..\CopyToCh\requirements.txt" Link="requirements.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Скрипты запуска всей цепочки этапов (1-4) одной командой. -->
+    <Content Include="..\run-pipeline.cmd" Link="run-pipeline.cmd">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\run-pipeline.sh" Link="run-pipeline.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

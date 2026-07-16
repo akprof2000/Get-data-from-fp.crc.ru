@@ -30,6 +30,9 @@ internal partial class Program
         catch (Exception ex)
         {
             Log.Error(ex.Message);
+            // Ненулевой код возврата: скрипт конвейера (run-pipeline) обязан
+            // остановиться, а не идти дальше с неполными данными.
+            Environment.ExitCode = 1;
         }
     }
 
