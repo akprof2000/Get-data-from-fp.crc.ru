@@ -126,16 +126,18 @@ public partial class Program
 
     private static void LoadConfiguration()
     {
+        // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «ParseTextHeader».
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddUserSecrets(typeof(Program).Assembly, optional: true)
             .AddEnvironmentVariables()
-            .Build();
+            .Build()
+            .GetSection("ParseTextHeader");
 
-        InputBasePath = config["Paths:InputBasePath"] ?? InputBasePath;
-        OutputJsonPath = config["Paths:OutputJsonPath"] ?? OutputJsonPath;
-        OutputErrorsPath = config["Paths:OutputErrorsPath"] ?? OutputErrorsPath;
+        InputBasePath = config["InputBasePath"] ?? InputBasePath;
+        OutputJsonPath = config["OutputJsonPath"] ?? OutputJsonPath;
+        OutputErrorsPath = config["OutputErrorsPath"] ?? OutputErrorsPath;
 
         if (int.TryParse(config["Processing:MaxParallelism"], out var mp) && mp > 0)
             MaxParallelism = mp;

@@ -5,13 +5,16 @@
 // (MLTextToData → ParseTextHeader).
 using GetSiteData.Common;
 using HtmlAgilityPack;
+using Microsoft.Extensions.Configuration;
 using System.Text;
 using System.Text.RegularExpressions;
 
 internal partial class Program
 {
-    private const string OutputDirectory = "output";       // вход: HTML от GetSiteData
-    private const string DocumentsDirectory = "documents"; // выход: тексты документов
+    // Пути берём из общего appsettings.json конвейера (секция «ParseHTML»);
+    // значения ниже — запасные, если файла или ключей нет.
+    private static string OutputDirectory = "output";       // вход: HTML от GetSiteData
+    private static string DocumentsDirectory = "documents"; // выход: тексты документов
 
     // Имя документа заканчивается датой «ДД.ММ.ГГГГ» — из неё берём подкаталоги год/месяц.
     [GeneratedRegex(@"\d{2}\.\d{2}\.\d{4}$")]
@@ -21,6 +24,7 @@ internal partial class Program
     {
         try
         {
+            LoadConfiguration();
             ProcessHtmlFiles();
         }
         catch (Exception ex)
@@ -29,8 +33,26 @@ internal partial class Program
         }
     }
 
+    // Читает свою секцию общего файла настроек конвейера.
+    private static void LoadConfiguration()
+    {
+        var config = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+            .AddEnvironmentVariables()
+            .Build()
+            .GetSection("ParseHTML");
+
+        OutputDirectory = config["InputPath"] ?? OutputDirectory;
+        DocumentsDirectory = config["DocumentsPath"] ?? DocumentsDirectory;
+    }
+
     private static void ProcessHtmlFiles()
     {
+        Log.Phase("Разбор HTML-страниц в тексты документов");
+        Log.Info($"Входная директория : {OutputDirectory}");
+        Log.Info($"Выходная директория: {DocumentsDirectory}");
+
         _ = Directory.CreateDirectory(OutputDirectory);
         _ = Directory.CreateDirectory(DocumentsDirectory);
 

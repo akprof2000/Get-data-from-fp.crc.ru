@@ -10,11 +10,16 @@ using CellsClassifier.Services;
 using GetSiteData.Common;
 using Microsoft.Extensions.Configuration;
 
+// Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «MLTextToData».
+// Файл ищем рядом с исполняемым файлом: приложения конвейера лежат в одном каталоге
+// и запускаются из произвольного рабочего каталога.
 var config = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false)
     .AddEnvironmentVariables()
     .AddCommandLine(args)
-    .Build();
+    .Build()
+    .GetSection("MLTextToData");
 
 // Обязательные пути; «!» оправдан — отсутствие ключа должно валить запуск сразу.
 var inputRoot = config["InputRoot"]!;

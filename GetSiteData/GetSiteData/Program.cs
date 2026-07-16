@@ -4,7 +4,7 @@
 // output/<термин>/<ГГГГ>/<ММ>/<типографский номер бланка>.html для последующего
 // разбора утилитой ParseHTML.
 //
-// Термины поиска и период сбора задаются в appsettings.json:
+// Настройки — в общем appsettings.json конвейера, секция «GetSiteData»:
 //   Search:Terms       — массив терминов (включая частые опечатки слова «базовая»,
 //                        встречающиеся в самом реестре);
 //   Search:PeriodStart — начало сбора, «ММ.ГГГГ»;
@@ -254,10 +254,13 @@ internal partial class Program
 
     private static bool LoadConfiguration()
     {
+        // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «GetSiteData».
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-            .Build();
+            .AddEnvironmentVariables()
+            .Build()
+            .GetSection("GetSiteData");
 
         string[] terms = [.. config.GetSection("Search:Terms").GetChildren()
             .Select(c => c.Value)
@@ -271,7 +274,7 @@ internal partial class Program
         if (!TryParseMonth(config["Search:PeriodStart"], out _periodStart)
             || !TryParseMonth(config["Search:PeriodEnd"], out _periodEnd))
         {
-            Log.Error("Search:PeriodStart / Search:PeriodEnd не заданы или не в формате «ММ.ГГГГ» — сбор невозможен.");
+            Log.Error("GetSiteData:Search:PeriodStart / PeriodEnd не заданы или не в формате «ММ.ГГГГ» — сбор невозможен.");
             return false;
         }
 
@@ -281,7 +284,7 @@ internal partial class Program
             return false;
         }
 
-        _outputPath = config["Paths:OutputPath"] ?? _outputPath;
+        _outputPath = config["OutputPath"] ?? _outputPath;
 
         if (int.TryParse(config["Processing:ResultsPerPage"], out int rpp) && rpp > 0)
         {
