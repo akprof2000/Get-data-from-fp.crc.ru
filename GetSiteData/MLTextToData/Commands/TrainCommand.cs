@@ -9,7 +9,7 @@ namespace CellsClassifier.Commands;
 /// Без force обучение пропускается, если размеченная выборка не изменилась
 /// со времени последнего обучения (сравнение по числу размеченных).
 /// </summary>
-public class TrainCommand(LiteDbRepository repo, MlTrainer trainer)
+public class TrainCommand(LiteDbRepository repo, MlTrainer trainer, MlPredictor predictor)
 {
     public async Task RunAsync(bool force = false)
     {
@@ -24,9 +24,9 @@ public class TrainCommand(LiteDbRepository repo, MlTrainer trainer)
             return;
         }
 
-        // Разметки мало или нет совсем: при обычном запуске (process) это не ошибка —
-        // классификация пойдёт по эвристике ключевых слов. Ошибкой это является только
-        // при явном запросе обучения (train --force).
+        // Разметки мало или нет совсем. При обычном запуске (process) это не ошибка:
+        // в поставку входит готовая модель — она и будет классифицировать; своя разметка
+        // нужна только для дообучения. Ошибка — лишь при явном запросе обучения (train).
         if (labeled.Count < MlTrainer.MinLabeledDocuments)
         {
             if (force)
@@ -35,7 +35,15 @@ public class TrainCommand(LiteDbRepository repo, MlTrainer trainer)
                     $"Недостаточно размеченных документов для обучения: {labeled.Count} (нужно минимум {MlTrainer.MinLabeledDocuments}).");
             }
 
-            Log.Warn($"Размеченных документов {labeled.Count} < {MlTrainer.MinLabeledDocuments} — модель не обучаем, классификация по эвристике.");
+            if (predictor.IsReady)
+            {
+                Log.Info($"Дообучение не требуется (размеченных документов {labeled.Count}) — используется готовая модель.");
+            }
+            else
+            {
+                Log.Warn($"Нет ни модели, ни разметки ({labeled.Count} документов) — классификация по эвристике ключевых слов.");
+            }
+
             return;
         }
 

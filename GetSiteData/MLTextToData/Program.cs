@@ -37,7 +37,7 @@ var hashService = new HashService();
 var trainer = new MlTrainer(modelPath);
 var predictor = new MlPredictor(modelPath);
 
-var trainCmd = new TrainCommand(repo, trainer);
+var trainCmd = new TrainCommand(repo, trainer, predictor);
 var processCmd = new ProcessCommand(
     scanner,
     extractor,

@@ -56,7 +56,7 @@ flowchart TB
 ### 📂 Каталог поставки
 
 ```
-📁 Get-data-from-fp.crc.ru/
+📁 Get-data-from-fp.crc.ru/          (в Linux — те же файлы без «.exe»)
 ├── GetSiteData.exe        1️⃣ сбор
 ├── ParseHTML.exe          2️⃣ разбор
 ├── MLTextToData.exe       3️⃣ классификация
@@ -206,14 +206,17 @@ python json_to_clickhouse.py --input-dir OutputJson --host localhost --database 
 
 ### Вариант А: готовый релиз 📦
 
-На странице [Releases](../../releases) два варианта:
+На странице [Releases](../../releases) — четыре архива: два варианта сборки под 🪟 Windows и 🐧 Linux.
 
-| Сборка | Что внутри | Кому подходит |
-|--------|-----------|---------------|
-| 🧳 **standalone** (`*-standalone-win-x64.zip`) | Четыре exe со встроенным .NET + модель. Ничего ставить не нужно | Запуск «как есть» на чистой машине |
-| 🪶 **compact** (`*-compact-win-x64.zip`) | Четыре exe + DLL-зависимости + модель. Требуется установленный [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) | Минимальный размер |
+| Сборка | Windows | Linux | Что внутри |
+|--------|---------|-------|-----------|
+| 🧳 **standalone** | `*-standalone-win-x64.zip` | `*-standalone-linux-x64.tar.gz` | Приложения со встроенным .NET + модель. **Ничего ставить не нужно** |
+| 🪶 **compact** | `*-compact-win-x64.zip` | `*-compact-linux-x64.tar.gz` | Приложения + библиотеки + модель. Требуется [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) |
 
-В обоих архивах всё лежит **в одном каталоге**: распакуйте и запускайте по порядку.
+В любом архиве всё лежит **в одном каталоге**: распакуйте и запускайте по порядку.
+
+<details open>
+<summary>🪟 <b>Windows</b></summary>
 
 ```powershell
 # 1. Настроить период и термины (секция GetSiteData)
@@ -229,13 +232,45 @@ notepad appsettings.json
 pip install -r requirements.txt
 python json_to_clickhouse.py --input-dir OutputJson
 ```
+</details>
+
+<details open>
+<summary>🐧 <b>Linux</b></summary>
+
+```bash
+tar xzf GetDataFpCrcRu-v1.1.0-standalone-linux-x64.tar.gz
+
+# 1. Настроить период и термины (секция GetSiteData)
+nano appsettings.json
+
+# 2. Запустить конвейер по этапам
+./GetSiteData             # 🌐 → output/
+./ParseHTML               # 📄 → documents/
+./MLTextToData process    # 🧠 → cells/ + other/
+./ParseTextHeader         # 📦 → OutputJson/ + OutputErrors/
+
+# 3. (необязательно) залить результат в ClickHouse
+pip install -r requirements.txt
+python3 json_to_clickhouse.py --input-dir OutputJson
+```
+</details>
 
 ### Вариант Б: сборка из исходников 🛠️
 
-```powershell
+```bash
 git clone https://github.com/akprof2000/Get-data-from-fp.crc.ru.git
 cd Get-data-from-fp.crc.ru
 dotnet build GetSiteData/GetSiteData.slnx -c Release
+```
+
+Собрать поставку в один каталог (замените `win-x64` на `linux-x64` для 🐧):
+
+```bash
+for p in GetSiteData ParseHTML MLTextToData ParseTextHeader; do
+  dotnet publish GetSiteData/$p/$p.csproj -c Release -r win-x64 \
+    --self-contained true -p:PublishSingleFile=true \
+    -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+done
 ```
 
 ---
