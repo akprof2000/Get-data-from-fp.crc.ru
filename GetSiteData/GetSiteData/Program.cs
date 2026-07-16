@@ -1,7 +1,7 @@
 // GetSiteData — первый этап пайплайна: помесячно скачивает страницы результатов
 // поиска с реестра fp.crc.ru по набору поисковых терминов, режет каждую страницу
 // на отдельные документы-заключения и складывает их в
-// output/<термин>/<ГГГГММ>/<типографский номер бланка>.html для последующего
+// output/<термин>/<ГГГГ>/<ММ>/<типографский номер бланка>.html для последующего
 // разбора утилитой ParseHTML.
 //
 // Термины поиска и период сбора задаются в appsettings.json:
@@ -95,8 +95,8 @@ internal partial class Program
 
     private static async Task ProcessMonthAsync(string searchTerm, DateOnly month)
     {
-        // Раскладка: output/<термин>/<ГГГГММ>/<индекс>.html
-        string outputPath = Path.Combine(_outputPath, searchTerm, month.ToString("yyyyMM"));
+        // Раскладка: output/<термин>/<ГГГГ>/<ММ>/<типографский номер бланка>.html
+        string outputPath = Path.Combine(_outputPath, searchTerm, month.ToString("yyyy"), month.ToString("MM"));
         _ = Directory.CreateDirectory(outputPath);
 
         // Первая страница нужна сразу — из неё узнаём общее число страниц.
