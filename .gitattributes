@@ -1,0 +1,11 @@
+# Скрипты для Linux обязаны иметь LF: с CRLF ядро не распознаёт строку «#!»
+# и запуск падает с «bad interpreter».
+*.sh text eol=lf
+*.py text eol=lf
+
+# Батники Windows — только CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Модель классификатора — двоичный файл, никаких преобразований.
+*.zip binary
