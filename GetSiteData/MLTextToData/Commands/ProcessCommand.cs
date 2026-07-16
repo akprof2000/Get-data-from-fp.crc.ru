@@ -55,6 +55,10 @@ public class ProcessCommand(
 
     private async Task ProcessFileAsync(string path)
     {
+        // Относительный путь от входного корня: он сохраняется в выходных каталогах,
+        // чтобы структура <год>/<месяц>/<документ> не терялась при копировании.
+        var relativePath = Path.GetRelativePath(scanner.Root, path);
+
         var hash = hashService.ComputeHash(path);
         var lastWrite = File.GetLastWriteTimeUtc(path);
 
@@ -68,6 +72,14 @@ public class ProcessCommand(
 
         var existing = await repo.GetByPathAsync(path);
         if (existing is { Processed: true } && existing.LastWriteTimeUtc == lastWrite)
+        {
+            return;
+        }
+
+        // Уже скопирован в один из выходных каталогов (например, база состояния
+        // была удалена или перенесена) — не копируем повторно.
+        if (File.Exists(Path.Combine(cellsOutput, relativePath)) ||
+            File.Exists(Path.Combine(otherOutput, relativePath)))
         {
             return;
         }
@@ -91,11 +103,12 @@ public class ProcessCommand(
 
         await repo.UpsertAsync(doc);
 
-        // Копия уходит в каталог своего класса. Имена документов уникальны
-        // (номер заключения), поэтому конфликт имён из разных подкаталогов
-        // практически исключён; overwrite — на случай переобработки.
+        // Копия уходит в каталог своего класса С СОХРАНЕНИЕМ структуры подкаталогов
+        // <год>/<месяц>/<документ> — дальше по конвейеру (ParseTextHeader) раскладка
+        // тоже опирается на относительный путь; overwrite — на случай переобработки.
         var target = predictedLabel ? cellsOutput : otherOutput;
-        var dest = Path.Combine(target, Path.GetFileName(path));
+        var dest = Path.Combine(target, relativePath);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
         File.Copy(path, dest, overwrite: true);
     }
 
