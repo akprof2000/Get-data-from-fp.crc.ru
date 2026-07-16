@@ -16,6 +16,8 @@ flowchart LR
     D -->|только базовые станции| E[🔍 ParseTextHeader<br>извлечение полей]
     E -->|"OutputJson/*.json"| F[(📦 Готовые данные<br>номер · адрес · координаты · оператор)]
     E -->|неполные записи| G[⚠️ OutputErrors]
+    F -.->|необязательно| H[🐍 json_to_clickhouse.py<br>загрузка в ClickHouse]
+    H -.-> I[(🗄️ ClickHouse<br>base_stations)]
 ```
 
 | Этап | Проект | Что делает |
@@ -24,6 +26,7 @@ flowchart LR
 | 2️⃣ | **ParseHTML** | Разбирает HTML-фрагменты в плоские тексты заключений |
 | 3️⃣ | **MLTextToData** | Бинарный ML-классификатор: отделяет базовые станции от посторонних СЭЗ (склады, производства…) |
 | 4️⃣ | **ParseTextHeader** | Извлекает номер станции, адрес, координаты и оператора; опциональная нормализация адресов через Dadata |
+| 5️⃣ | **json_to_clickhouse.py** 🐍 | *Необязательный этап:* пакетная загрузка готовых JSON в ClickHouse (многопоточно, с логированием) |
 | 🧰 | **Common** | Общая библиотека логирования (единый стиль всех этапов) |
 
 ---
@@ -59,6 +62,8 @@ flowchart TB
 ├── MLTextToData.exe       3️⃣ классификация
 ├── ParseTextHeader.exe    4️⃣ извлечение
 ├── appsettings.json       ⚙️ общие настройки (секция на этап)
+├── json_to_clickhouse.py  5️⃣ загрузка JSON в ClickHouse (необязательно)
+├── requirements.txt       🐍 зависимость скрипта (clickhouse-driver)
 └── data/
     └── model.zip          🧠 обученная модель классификатора
 ```
@@ -178,6 +183,23 @@ flowchart TB
 
 **Точность на корпусе 111 917 документов: 99,69 %** заполненных записей (0,31 % неполных — как правило, данные реально отсутствуют в первоисточнике).
 
+## 🐍 Этап 5 (необязательный): json_to_clickhouse.py — выгрузка в ClickHouse
+
+Пакетно заливает готовые JSON в таблицу ClickHouse: многопоточное чтение (рассчитан на сотни тысяч файлов), батчевая вставка, ротация логов и отдельный лог ошибок.
+
+```powershell
+pip install -r requirements.txt
+python json_to_clickhouse.py --input-dir OutputJson --host localhost --database sanpin --table base_stations
+```
+
+🔒 Реквизиты подключения **в коде не хранятся** — задавайте их флагами или переменными окружения:
+
+| Переменная | Назначение | По умолчанию |
+|------------|-----------|--------------|
+| `CH_HOST` / `CH_PORT` | 🖥️ Адрес и native-порт сервера | `localhost` / `9000` |
+| `CH_DATABASE` / `CH_TABLE` | 🗄️ База и таблица | `sanpin` / `base_stations` |
+| `CH_USER` / `CH_PASSWORD` | 🔑 Учётные данные | `default` / пусто |
+
 ---
 
 ## 🚀 Быстрый старт
@@ -202,6 +224,10 @@ notepad appsettings.json
 .\ParseHTML.exe            # 📄 → documents/
 .\MLTextToData.exe process # 🧠 → cells/ + other/
 .\ParseTextHeader.exe      # 📦 → OutputJson/ + OutputErrors/
+
+# 3. (необязательно) залить результат в ClickHouse
+pip install -r requirements.txt
+python json_to_clickhouse.py --input-dir OutputJson
 ```
 
 ### Вариант Б: сборка из исходников 🛠️

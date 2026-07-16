@@ -22,6 +22,14 @@
     <Content Include="..\appsettings.json" Link="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Этап 5 (необязательный): загрузка готовых JSON в ClickHouse.
+         Кладём рядом с приложениями конвейера, чтобы поставка была единым каталогом. -->
+    <Content Include="..\CopyToCh\json_to_clickhouse.py" Link="json_to_clickhouse.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\CopyToCh\requirements.txt" Link="requirements.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

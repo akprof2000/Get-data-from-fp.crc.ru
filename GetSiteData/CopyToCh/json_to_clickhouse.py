@@ -8,10 +8,13 @@
   - Логирование каждого этапа pipeline
 
 Зависимости:
-    pip install clickhouse-driver
+    pip install -r requirements.txt   (clickhouse-driver)
 
 Использование:
-    python json_to_clickhouse_v3.py --input-dir /path/to/json/files --host localhost --database default --table base_stations
+    python json_to_clickhouse.py --input-dir OutputJson --host localhost --database sanpin --table base_stations
+
+Реквизиты подключения можно не передавать флагами, а задать переменными окружения:
+    CH_HOST, CH_PORT, CH_DATABASE, CH_TABLE, CH_USER, CH_PASSWORD
 """
 
 import argparse
