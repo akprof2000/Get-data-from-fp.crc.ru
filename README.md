@@ -11,7 +11,7 @@
 ```mermaid
 flowchart LR
     A[🌐 fp.crc.ru<br>реестр СЭЗ] -->|помесячные запросы| B[📥 GetSiteData<br>сбор HTML]
-    B -->|"output/&lt;термин&gt;/&lt;ГГГГ&gt;/&lt;ММ&gt;/&lt;бланк&gt;.html"| C[✂️ ParseHTML<br>HTML → текст]
+    B -->|"output/&lt;термин&gt;/&lt;ГГГГ&gt;/&lt;ММ&gt;/&lt;номер заключения&gt;.html"| C[✂️ ParseHTML<br>HTML → текст]
     C -->|"documents/&lt;год&gt;/&lt;месяц&gt;/&lt;номер&gt;.txt"| D[🧠 MLTextToData<br>ML-классификатор]
     D -->|только базовые станции| E[🔍 ParseTextHeader<br>извлечение полей]
     E -->|"OutputJson/*.json"| F[(📦 Готовые данные<br>номер · адрес · координаты · оператор)]
