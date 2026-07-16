@@ -24,6 +24,21 @@ public class TrainCommand(LiteDbRepository repo, MlTrainer trainer)
             return;
         }
 
+        // Разметки мало или нет совсем: при обычном запуске (process) это не ошибка —
+        // классификация пойдёт по эвристике ключевых слов. Ошибкой это является только
+        // при явном запросе обучения (train --force).
+        if (labeled.Count < MlTrainer.MinLabeledDocuments)
+        {
+            if (force)
+            {
+                throw new InvalidOperationException(
+                    $"Недостаточно размеченных документов для обучения: {labeled.Count} (нужно минимум {MlTrainer.MinLabeledDocuments}).");
+            }
+
+            Log.Warn($"Размеченных документов {labeled.Count} < {MlTrainer.MinLabeledDocuments} — модель не обучаем, классификация по эвристике.");
+            return;
+        }
+
         Log.Phase($"Обучение модели: размеченных документов — {labeled.Count}");
         trainer.TrainFromDocuments(labeled);
 

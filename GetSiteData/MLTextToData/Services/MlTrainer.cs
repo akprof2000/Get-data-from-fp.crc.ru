@@ -10,6 +10,9 @@ namespace CellsClassifier.Services;
 /// </summary>
 public class MlTrainer
 {
+    /// <summary>Минимум размеченных документов, при котором обучение имеет смысл.</summary>
+    public const int MinLabeledDocuments = 10;
+
     private readonly string _modelPath;
     private readonly MLContext _ml;
 
@@ -39,9 +42,9 @@ public class MlTrainer
             })
             .ToList();
 
-        if (labeled.Count < 10)
+        if (labeled.Count < MinLabeledDocuments)
         {
-            throw new InvalidOperationException("Недостаточно размеченных документов для обучения (нужно минимум 10).");
+            throw new InvalidOperationException($"Недостаточно размеченных документов для обучения (нужно минимум {MinLabeledDocuments}).");
         }
 
         var data = _ml.Data.LoadFromEnumerable(labeled);

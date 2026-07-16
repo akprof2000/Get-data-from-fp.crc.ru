@@ -100,8 +100,10 @@ public class ProcessCommand(
     }
 
     /// <summary>
-    /// Классифицирует текст: обученной моделью, а до её появления — простой
-    /// эвристикой по ключевым словам предметной области.
+    /// Классифицирует текст: обученной моделью, а до её появления — эвристикой
+    /// по ключевым словам. Эвристика повторяет правило IsBaseStationDocument из
+    /// ParseTextHeader, отлаженное регрессионно на корпусе 111 917 документов
+    /// (пропуски серий с сокращёнными диапазонами «D1800; L1800» и т.п. учтены).
     /// </summary>
     private (bool IsCells, float Score) Classify(string text)
     {
@@ -111,14 +113,41 @@ public class ProcessCommand(
             return (prediction.PredictedLabel && prediction.Score >= threshold, prediction.Score);
         }
 
-        var lower = text.ToLowerInvariant();
-        var hasCells = lower.Contains("базовая станция") ||
-                       lower.Contains("сотовой связи") ||
-                       lower.Contains("lte") ||
-                       lower.Contains("gsm") ||
-                       lower.Contains("умts") ||
-                       lower.Contains("передающего радиотехнического объекта") ||
-                       lower.Contains("рэс");
-        return (hasCells, hasCells ? 0.7f : 0.3f);
+        return (IsBaseStationHeuristic(text), 0.5f);
+    }
+
+    private static bool IsBaseStationHeuristic(string text)
+    {
+        // Явное упоминание базовой станции — достаточный признак сам по себе
+        // (покрывает «базовая/базовой/базовую станцию»).
+        if (text.Contains("базовая станци", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("базовой станци", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("базовую станци", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Без явной фразы — требуем сотовый/радио-маркер И маркер РЭС/ПРТО.
+        bool hasCellular = text.Contains("GSM", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("LTE", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("UMTS", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("DCS", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("сотовой", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("радиотелефонной", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("подвижной", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("BTS", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("ПРТО", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("радиорелейн", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("высокоскоростной железнодорожной", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("ВСМ", StringComparison.OrdinalIgnoreCase);
+
+        if (!hasCellular)
+        {
+            return false;
+        }
+
+        return text.Contains("радиоэлектронных средств", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("радиоэлектронного средства", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("ПРТО", StringComparison.OrdinalIgnoreCase);
     }
 }
