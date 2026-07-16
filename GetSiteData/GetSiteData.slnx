@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="GetSiteData/GetSiteData.csproj" />
+  <Project Path="MLTextToData/MLTextToData.csproj" />
+  <Project Path="ParseHTML/ParseHTML.csproj" />
+  <Project Path="ParseTextHeader/ParseTextHeader.csproj" />
+</Solution>

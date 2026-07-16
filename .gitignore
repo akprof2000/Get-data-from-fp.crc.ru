@@ -1,0 +1,23 @@
+# Сборка .NET
+bin/
+obj/
+publish/
+*.user
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# Локальные данные пайплайна (скачанные страницы, тексты, результаты)
+output/
+output-dt/
+documents/
+Documents/
+OutputJson/
+OutputErrors/
+*.db
+*.zip
+
+# Служебное
+.claude/
