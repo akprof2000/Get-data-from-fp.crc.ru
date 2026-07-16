@@ -15,9 +15,10 @@
 // «…Т.002218.08.24» в номере документа.
 //
 // Документы на странице разделены блоками «<hr size="1" width="100%"><b>4951.</b>»;
-// именем файла становится типографский номер бланка документа
-// («Типографский номер бланка — 2607785» → 2607785.html). Уже существующие файлы
-// пропускаются.
+// именем файла становится «Номер заключения и дата»
+// («77.01.09.000.Т.002236.06.26 от 08.06.2026» → одноимённый .html) — он есть у каждого
+// документа; типографский номер бланка — запасной вариант (бывает не у всех).
+// Уже существующие файлы пропускаются.
 using Flurl;
 using Flurl.Http;
 using GetSiteData.Common;
@@ -49,10 +50,19 @@ internal partial class Program
     [GeneratedRegex("<hr size=\"1\" width=\"100%\"><b>(\\d+)\\.</b>")]
     private static partial Regex DocumentMarkerRx();
 
-    // Типографский номер бланка внутри фрагмента документа:
-    // «<td class=w30r>Типографский номер бланка —&nbsp;</td> <td> <b>2607785</b> …»
+    // Номер заключения и дата — основной идентификатор документа (есть у всех):
+    // «<td class=w30r>Номер заключения и дата —&nbsp;</td> <td><b>77.01.09.000.Т.002236.06.26 от 08.06.2026</b>»
+    [GeneratedRegex(@"Номер\s+заключения\s+и\s+дата[^<]*</td>\s*<td>\s*<b>\s*([^<]+?)\s*</b>", RegexOptions.IgnoreCase)]
+    private static partial Regex ConclusionNumberRx();
+
+    // Типографский номер бланка — запасной идентификатор, если номера заключения
+    // вдруг нет: «<td class=w30r>Типографский номер бланка —&nbsp;</td> <td> <b>2607785</b> …»
     [GeneratedRegex(@"Типографский\s+номер\s+бланка[^<]*</td>\s*<td>\s*<b>\s*(\d+)", RegexOptions.IgnoreCase)]
     private static partial Regex BlankNumberRx();
+
+    // Символы, недопустимые в имени файла Windows/Linux.
+    [GeneratedRegex("[\\\\/:*?\"<>|\\r\\n\\t]+")]
+    private static partial Regex InvalidFileCharsRx();
 
     private static async Task Main()
     {
@@ -119,8 +129,8 @@ internal partial class Program
     }
 
     // Режет страницу результатов на документы по маркерам «<hr…><b>N.</b>» и сохраняет
-    // каждый как <типографский номер бланка>.html. Возвращает число записанных
-    // (не пропущенных) файлов.
+    // каждый как <номер заключения и дата>.html (запасной вариант — типографский номер
+    // бланка). Возвращает число записанных (не пропущенных) файлов.
     private static int SaveDocuments(string pageHtml, string outputPath)
     {
         var markers = DocumentMarkerRx().Matches(pageHtml);
@@ -156,17 +166,29 @@ internal partial class Program
 
             string fragment = pageHtml[start..end];
 
-            // Имя файла — типографский номер бланка документа (уникален в реестре).
-            var blank = BlankNumberRx().Match(fragment);
-            if (!blank.Success)
+            // Имя файла — «Номер заключения и дата» (есть у каждого документа);
+            // если его вдруг нет — типографский номер бланка (бывает не у всех).
+            string? id = null;
+            var conclusion = ConclusionNumberRx().Match(fragment);
+            if (conclusion.Success)
             {
-                // Без номера бланка документ не идентифицировать — пропускаем с предупреждением
-                // (сквозной индекс в качестве имени не годится: он зависит от страницы выдачи).
-                Log.Warn($"Документ №{markers[i].Groups[1].Value} без типографского номера бланка — пропущен.");
+                id = HttpUtility.HtmlDecode(conclusion.Groups[1].Value).Trim();
+            }
+            else
+            {
+                var blank = BlankNumberRx().Match(fragment);
+                if (blank.Success) id = blank.Groups[1].Value;
+            }
+
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                // Совсем без идентификаторов документ не сохранить: сквозной индекс
+                // выдачи в качестве имени не годится — он зависит от страницы.
+                Log.Warn($"Документ №{markers[i].Groups[1].Value} без номера заключения и номера бланка — пропущен.");
                 continue;
             }
 
-            string filePath = Path.Combine(outputPath, $"{blank.Groups[1].Value}.html");
+            string filePath = Path.Combine(outputPath, $"{InvalidFileCharsRx().Replace(id, " ").Trim()}.html");
             if (File.Exists(filePath))
             {
                 Log.Skip($"Файл {filePath} уже существует.");
