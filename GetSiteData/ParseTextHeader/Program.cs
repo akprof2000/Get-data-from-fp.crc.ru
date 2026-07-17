@@ -1,4 +1,4 @@
-using Dadata;
+﻿using Dadata;
 using Dadata.Model;
 using GetSiteData.Common;
 using Microsoft.Extensions.Configuration;
@@ -214,15 +214,12 @@ public partial class Program
             return ProcessingResult.Skipped;
         }
 
-        // Проверяем, является ли документ документом базовой станции.
-        // Если в тексте нет ни одного маркера БС — пропускаем (напр. склады, СЗЗ для нерадио).
-        if (!IsBaseStationDocument(fullText))
-        {
-            Log.Skip($"Не является документом БС: {relativePath}");
-            MarkProcessed(subDir, fileInfo.Name);
-            return ProcessingResult.Skipped;
-        }
-
+        // Собственной проверки «документ ли это БС» здесь НЕТ намеренно: отбор
+        // выполняет предыдущий этап конвейера (ML-классификатор MLTextToData),
+        // и всё, что пришло на вход, разбирается безусловно. Прежняя проверка
+        // по ключевым словам дублировала классификатор и ошибочно отбрасывала
+        // реальные документы с редкими формулировками («Проект модернизации
+        // БС № 76-00109…», «условия размещения РЭС ПАО "МТС" БС № BTS-…»).
         var document = await ParseDocumentAsync(firstLines, fullText, fileInfo.Name, relativePath);
         var hasAll = document.HasAllRequiredFields();
 
@@ -658,6 +655,9 @@ public partial class Program
         (@"\(радиоэлектронное\s+средство\)\s*[-–]?\s*([A-ZА-ЯЁ]{2}\d{3,}(?:_[A-Za-z0-9]+)?)\b", 1),
         // «(радиоэлектронное средство) 67-00646UL18L26N18» — цифровой код после пометки РЭС (67-СО-01)
         (@"\(радиоэлектронное\s+средство\)\s*(\d{2,3}-\d{3,}[A-Za-zА-ЯЁ0-9]*)\b", 1),
+        // «Оборудование радиосвязи ООО "Вертикаль" на объекте PL 66-521 ПАО "МТС"» —
+        // идентификатор объекта размещения, слова «базовая станция» в документе нет (66-01-32)
+        (@"на\s+объекте\s+(PL\s?\d{2}[- ]?\d{3,})\b", 1),
 
         // ── Остаток разбора bigfix14: ведомственные и ж/д станции ────────────────────────────
         // «БС 86 ст. Москва-Пассажирская-Курская» / «БС 88 Узел связи 3 км» — БС реконструкции
@@ -759,45 +759,6 @@ public partial class Program
     }
 
     // ── Helpers ────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Быстрая проверка: содержит ли документ признаки документа базовой станции.
-    /// Отсекает посторонние СЭЗ-документы (склады, производства, промышленные РС).
-    /// </summary>
-    private static bool IsBaseStationDocument(string text)
-    {
-        // Явное упоминание базовой станции — достаточный признак САМО ПО СЕБЕ.
-        // Раньше дополнительно требовался «сотовый» маркер (GSM/LTE/сотовой/ПРТО...),
-        // из-за чего ЦЕЛИКОМ пропускались серии документов, где диапазоны записаны
-        // сокращениями («D1800; L1800; U2100» — Карелия/ВымпелКом, «1800L/2100L МГц» —
-        // Ярославль/Т2 Мобайл): 1072 из 1118 пропущенных документов корпуса оказались
-        // такими ложными пропусками (10-КЦ-01, 76-01-10 и др.).
-        if (text.Contains("базовая станци", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("базовой станци", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("базовую станци", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        // Без явной фразы — требуем сотовый/радио-маркер И маркер РЭС/ПРТО.
-        bool hasCellular = text.Contains("GSM", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("LTE", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("UMTS", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("DCS", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("сотовой", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("радиотелефонной", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("подвижной", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("BTS", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("ПРТО", StringComparison.OrdinalIgnoreCase)
-            // РРС / ВСМ / железнодорожная связь
-            || text.Contains("радиорелейн", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("высокоскоростной железнодорожной", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("ВСМ", StringComparison.OrdinalIgnoreCase);
-
-        if (!hasCellular) return false;
-
-        return text.Contains("радиоэлектронных средств", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("радиоэлектронного средства", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("ПРТО", StringComparison.OrdinalIgnoreCase);
-    }
 
     private static string GetSubDir(FileInfo fileInfo)
     {

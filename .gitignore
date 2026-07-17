@@ -14,6 +14,7 @@ output/
 output-dt/
 documents/
 Documents/
+logs/
 OutputJson/
 OutputErrors/
 *.db
