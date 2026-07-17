@@ -166,29 +166,28 @@ internal partial class Program
 
             string fragment = pageHtml[start..end];
 
-            // Имя файла — «Номер заключения и дата» (есть у каждого документа);
-            // если его вдруг нет — типографский номер бланка (бывает не у всех).
+            // Имя файла — «Номер заключения и дата»: единый формат всего конвейера,
+            // следующие этапы принимают ТОЛЬКО такие имена (Common.DocumentName).
             string? id = null;
             var conclusion = ConclusionNumberRx().Match(fragment);
             if (conclusion.Success)
             {
                 id = HttpUtility.HtmlDecode(conclusion.Groups[1].Value).Trim();
-            }
-            else
-            {
-                var blank = BlankNumberRx().Match(fragment);
-                if (blank.Success) id = blank.Groups[1].Value;
+                id = InvalidFileCharsRx().Replace(id, " ").Trim();
             }
 
-            if (string.IsNullOrWhiteSpace(id))
+            if (!DocumentName.IsValid(id))
             {
-                // Совсем без идентификаторов документ не сохранить: сквозной индекс
-                // выдачи в качестве имени не годится — он зависит от страницы.
-                Log.Warn($"Документ №{markers[i].Groups[1].Value} без номера заключения и номера бланка — пропущен.");
+                // Номер отсутствует или не по формату — такой файл всё равно
+                // отбросили бы следующие этапы. Для расследования пишем в лог
+                // и сквозной индекс выдачи, и типографский номер бланка.
+                var blank = BlankNumberRx().Match(fragment);
+                Log.Warn($"Документ №{markers[i].Groups[1].Value} (бланк {(blank.Success ? blank.Groups[1].Value : "н/д")}): " +
+                         $"номер заключения «{id}» не по формату — пропущен.");
                 continue;
             }
 
-            string filePath = Path.Combine(outputPath, $"{InvalidFileCharsRx().Replace(id, " ").Trim()}.html");
+            string filePath = Path.Combine(outputPath, $"{id}.html");
             if (File.Exists(filePath))
             {
                 Log.Skip($"Файл {filePath} уже существует.");

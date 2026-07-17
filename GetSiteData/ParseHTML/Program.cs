@@ -16,10 +16,6 @@ internal partial class Program
     private static string OutputDirectory = "output";       // вход: HTML от GetSiteData
     private static string DocumentsDirectory = "documents"; // выход: тексты документов
 
-    // Имя документа заканчивается датой «ДД.ММ.ГГГГ» — из неё берём подкаталоги год/месяц.
-    [GeneratedRegex(@"\d{2}\.\d{2}\.\d{4}$")]
-    private static partial Regex TrailingDateRegex();
-
     private static void Main()
     {
         try
@@ -61,6 +57,15 @@ internal partial class Program
 
         foreach (string item in Directory.EnumerateFiles(OutputDirectory, "*.html", SearchOption.AllDirectories))
         {
+            // Единый формат конвейера: обрабатываем только файлы с именем
+            // «Номер заключения и дата» (их порождает GetSiteData). Посторонние
+            // html (например, page-N.html старой раскладки) пропускаем.
+            if (!DocumentName.IsValidFileName(item))
+            {
+                Log.Skip($"Имя не по формату документа: {item}");
+                continue;
+            }
+
             try
             {
                 Log.Info($"Читаю файл: {item}");
@@ -185,9 +190,10 @@ internal partial class Program
         }
 
         // Имя вида «01.РА.01.000.Т.000001.01.22 от 10.01.2022» — год и месяц
-        // берём из завершающей даты «ДД.ММ.ГГГГ».
+        // берём из завершающей даты «ДД.ММ.ГГГГ». Проверяем ПОЛНЫЙ формат
+        // документа конвейера, а не только хвост-дату.
         string nm = Path.GetFileNameWithoutExtension(fileName);
-        if (!TrailingDateRegex().IsMatch(nm))
+        if (!DocumentName.IsValid(nm))
         {
             Log.Warn($"Неожиданное имя документа, пропускаю: {nm}");
             return;

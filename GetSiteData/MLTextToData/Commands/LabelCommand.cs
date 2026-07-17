@@ -21,7 +21,11 @@ public class LabelCommand(HashService hashService, LiteDbRepository repo)
             return;
         }
 
-        var files = Directory.EnumerateFiles(directory, "*.txt", SearchOption.AllDirectories).ToList();
+        // Обучающая выборка — те же документы конвейера: разметку получают только
+        // файлы единого формата «Номер заключения и дата».
+        var files = Directory.EnumerateFiles(directory, "*.txt", SearchOption.AllDirectories)
+            .Where(DocumentName.IsValidFileName)
+            .ToList();
         Log.Phase($"Разметка «{(isCells ? "cells" : "other")}»: файлов — {files.Count}");
 
         int labeled = 0;

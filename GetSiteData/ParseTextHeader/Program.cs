@@ -67,8 +67,11 @@ public partial class Program
         // Загружаем логи всех существующих подкаталогов заранее
         LoadAllProcessedLogs();
 
+        // Единый формат конвейера: берём только файлы с именем «Номер заключения
+        // и дата» (Common.DocumentName) — служебные и посторонние не трогаем.
         var allFiles = Directory
             .EnumerateFiles(InputBasePath, "*.txt", SearchOption.AllDirectories)
+            .Where(DocumentName.IsValidFileName)
             .Select(f => new FileInfo(f))
             .OrderByDescending(f => f.FullName)
             .ToList();
