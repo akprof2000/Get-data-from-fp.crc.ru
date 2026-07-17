@@ -282,9 +282,13 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
 
 
 def collect_json_files(root_dir: Path, logger: logging.Logger) -> List[Path]:
-    """Рекурсивно собирает все *.json файлы."""
+    """Рекурсивно собирает все *.json файлы.
+
+    _processed.json пропускаем: это служебные журналы ParseTextHeader
+    («какие файлы уже обработаны»), а не документы базовых станций.
+    """
     logger.info("Сканирование директории: %s", root_dir)
-    files = list(root_dir.rglob("*.json"))
+    files = [f for f in root_dir.rglob("*.json") if f.name != "_processed.json"]
     logger.info("Найдено JSON-файлов: %d", len(files))
     if len(files) > 0:
         logger.debug("Примеры файлов: %s", [str(f) for f in files[:5]])
