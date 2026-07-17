@@ -4,7 +4,7 @@
        патч (1.2.x) — исправления, минор (1.x.0) — новые возможности,
        мажор (x.0.0) — несовместимые изменения (формат данных, настройки). -->
   <PropertyGroup>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <Product>Get data from fp.crc.ru</Product>
   </PropertyGroup>
 
