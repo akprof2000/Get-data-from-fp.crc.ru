@@ -105,8 +105,11 @@ internal partial class Program
 
     private static async Task ProcessMonthAsync(string searchTerm, DateOnly month)
     {
-        // Раскладка: output/<термин>/<ГГГГ>/<ММ>/<типографский номер бланка>.html
-        string outputPath = Path.Combine(_outputPath, searchTerm, month.ToString("yyyy"), month.ToString("MM"));
+        // Раскладка: output/<термин>/<ГГГГ>/<ММ>/<номер заключения>.html.
+        // Термин может содержать wildcard поиска («базов*», «Вымпел*») — символы,
+        // недопустимые в имени каталога Windows, заменяем подчёркиванием.
+        string termDir = InvalidFileCharsRx().Replace(searchTerm, "_").Trim();
+        string outputPath = Path.Combine(_outputPath, termDir, month.ToString("yyyy"), month.ToString("MM"));
         _ = Directory.CreateDirectory(outputPath);
 
         // Первая страница нужна сразу — из неё узнаём общее число страниц.
