@@ -4,7 +4,7 @@
 #  Настройки - в appsettings.json рядом с этим файлом.
 #  Пятый, необязательный этап (выгрузка в ClickHouse) НЕ входит
 #  в цепочку и запускается отдельно:
-#     python3 json_to_clickhouse.py --input-dir OutputJson
+#     python3 json_to_clickhouse.py --input-dir works/OutputJson
 # ============================================================
 set -u
 cd "$(dirname "$0")"
@@ -47,10 +47,10 @@ run_step "4/4 Извлечение данных в JSON"        ./ParseTextHeade
 echo
 echo "============================================"
 echo "  Готово. Результат:"
-echo "    OutputJson/   - полные записи"
-echo "    OutputErrors/ - неполные записи"
+echo "    works/OutputJson/   - полные записи"
+echo "    works/OutputErrors/ - неполные записи"
 echo
 echo "  Выгрузить в ClickHouse (необязательно):"
-echo "    python3 json_to_clickhouse.py --input-dir OutputJson"
+echo "    python3 json_to_clickhouse.py --input-dir works/OutputJson"
 echo "============================================"
 echo

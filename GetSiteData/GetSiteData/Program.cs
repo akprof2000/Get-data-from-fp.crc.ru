@@ -275,13 +275,15 @@ internal partial class Program
 
     private static bool LoadConfiguration()
     {
-        // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «GetSiteData».
-        var config = new ConfigurationBuilder()
+        // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «GetSiteData»;
+        // общий корень рабочих данных (WorkRoot) лежит на верхнем уровне файла.
+        var fullConfig = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
-            .Build()
-            .GetSection("GetSiteData");
+            .Build();
+        var workRoot = WorkDir.GetRoot(fullConfig);
+        var config = fullConfig.GetSection("GetSiteData");
 
         string[] terms = [.. config.GetSection("Search:Terms").GetChildren()
             .Select(c => c.Value)
@@ -305,7 +307,8 @@ internal partial class Program
             return false;
         }
 
-        _outputPath = config["OutputPath"] ?? _outputPath;
+        // Каталог выгрузки — под общим корнем: works/output (абсолютный путь — как есть).
+        _outputPath = WorkDir.Resolve(workRoot, config["OutputPath"] ?? _outputPath);
 
         if (int.TryParse(config["Processing:ResultsPerPage"], out int rpp) && rpp > 0)
         {

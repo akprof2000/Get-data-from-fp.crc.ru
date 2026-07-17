@@ -73,7 +73,7 @@ flowchart TB
 Пути в настройках образуют сквозную цепочку — этапы стыкуются «из коробки»:
 
 ```
-output/  →  documents/  →  cells/ + other/  →  OutputJson/ + OutputErrors/
+works/output  →  works/documents  →  works/cells + works/other  →  works/OutputJson + works/OutputErrors
 ```
 
 Любой ключ переопределяется переменной окружения через `__`, например `ParseTextHeader__Dadata__Token=…` или `GetSiteData__Search__PeriodEnd=12.2026`.
@@ -191,7 +191,7 @@ flowchart TB
 
 ```powershell
 pip install -r requirements.txt
-python json_to_clickhouse.py --input-dir OutputJson --host localhost --database sanpin --table base_stations
+python json_to_clickhouse.py --input-dir works/OutputJson --host localhost --database sanpin --table base_stations
 ```
 
 🔒 Реквизиты подключения **в коде не хранятся** — задавайте их флагами или переменными окружения:
@@ -231,16 +231,16 @@ notepad appsettings.json
 ▶️ `run-pipeline.cmd` последовательно вызывает все четыре этапа и **останавливается на первой же ошибке**, не запуская следующие. Можно и по одному:
 
 ```powershell
-.\GetSiteData.exe          # 🌐 → output/
-.\ParseHTML.exe            # 📄 → documents/
-.\MLTextToData.exe process # 🧠 → cells/ + other/
-.\ParseTextHeader.exe      # 📦 → OutputJson/ + OutputErrors/
+.\GetSiteData.exe          # 🌐 → works/output/
+.\ParseHTML.exe            # 📄 → works/documents/
+.\MLTextToData.exe process # 🧠 → works/cells/ + works/other/
+.\ParseTextHeader.exe      # 📦 → works/OutputJson/ + works/OutputErrors/
 ```
 
 ```powershell
 # 3. (необязательно) залить результат в ClickHouse
 pip install -r requirements.txt
-python json_to_clickhouse.py --input-dir OutputJson
+python json_to_clickhouse.py --input-dir works/OutputJson
 ```
 </details>
 
@@ -260,16 +260,16 @@ nano appsettings.json
 ▶️ `run-pipeline.sh` последовательно вызывает все четыре этапа и **останавливается на первой же ошибке**, не запуская следующие. Можно и по одному:
 
 ```bash
-./GetSiteData             # 🌐 → output/
-./ParseHTML               # 📄 → documents/
-./MLTextToData process    # 🧠 → cells/ + other/
-./ParseTextHeader         # 📦 → OutputJson/ + OutputErrors/
+./GetSiteData             # 🌐 → works/output/
+./ParseHTML               # 📄 → works/documents/
+./MLTextToData process    # 🧠 → works/cells/ + works/other/
+./ParseTextHeader         # 📦 → works/OutputJson/ + works/OutputErrors/
 ```
 
 ```bash
 # 3. (необязательно) залить результат в ClickHouse
 pip install -r requirements.txt
-python3 json_to_clickhouse.py --input-dir OutputJson
+python3 json_to_clickhouse.py --input-dir works/OutputJson
 ```
 </details>
 
@@ -382,7 +382,7 @@ flowchart LR
 - 🛑 **Останавливается на первой ошибке** — если этап вернул ненулевой код, следующие не запускаются, а на экран выводится, какой этап упал и с каким кодом. Этот же код скрипт возвращает наружу (удобно для планировщика задач).
 - 🔁 **Безопасно перезапускать.** Все этапы помнят, что уже сделано: сборщик пропускает скачанные документы, классификатор — обработанные (по базе `data/state.db` и по наличию файла), извлечение — уже разобранные. Упал сбор на середине — просто запустите скрипт ещё раз, он докачает недостающее и пройдёт дальше.
 - 📅 **Дособрать новый месяц:** поменяйте `PeriodStart`/`PeriodEnd` в `appsettings.json` и снова запустите скрипт. Старые месяцы останутся на месте, скачается и обработается только новое.
-- 🐍 **Пятый этап в цепочку не входит.** Выгрузка в ClickHouse запускается отдельно, когда JSON готовы: `python json_to_clickhouse.py --input-dir OutputJson`.
+- 🐍 **Пятый этап в цепочку не входит.** Выгрузка в ClickHouse запускается отдельно, когда JSON готовы: `python json_to_clickhouse.py --input-dir works/OutputJson`.
 
 Типовой сценарий от нуля до данных:
 
@@ -392,7 +392,7 @@ flowchart LR
 notepad appsettings.json
 # 3) запустить и дождаться «Готово»
 .\run-pipeline.cmd
-# 4) результат — в OutputJson\<год>\<месяц>\*.json
+# 4) результат — в works\OutputJson\<год>\<месяц>\*.json
 ```
 
 ⚠️ Если пользовались версией до v1.1.0: старые результаты лежали по другой раскладке (без год/месяц у классификатора, имена по номеру бланка у сборщика). Перед первым запуском новой версии очистите рабочие каталоги `output`, `documents`, `cells`, `other`, `OutputJson`, `OutputErrors` и `data/state.db` — иначе рядом со свежей структурой останутся старые дубли.

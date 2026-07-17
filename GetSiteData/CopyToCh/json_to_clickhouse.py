@@ -646,7 +646,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Загрузка JSON-файлов в ClickHouse с полноценным логированием"
     )
-    parser.add_argument("--input-dir", default="./",  help="Корневая директория с JSON")
+    # По умолчанию — выход ParseTextHeader под общим корнем рабочих данных конвейера.
+    parser.add_argument("--input-dir", default="works/OutputJson", help="Корневая директория с JSON")
     # Подключение: значения по умолчанию берутся из переменных окружения CH_*,
     # чтобы реальные адреса и пароли не попадали в код и историю git.
     parser.add_argument("--host", default=os.environ.get("CH_HOST", "localhost"), help="ClickHouse host")

@@ -129,18 +129,20 @@ public partial class Program
 
     private static void LoadConfiguration()
     {
-        // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «ParseTextHeader».
-        var config = new ConfigurationBuilder()
+        // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «ParseTextHeader»;
+        // общий корень рабочих данных (WorkRoot) лежит на верхнем уровне файла.
+        var fullConfig = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddUserSecrets(typeof(Program).Assembly, optional: true)
             .AddEnvironmentVariables()
-            .Build()
-            .GetSection("ParseTextHeader");
+            .Build();
+        var workRoot = WorkDir.GetRoot(fullConfig);
+        var config = fullConfig.GetSection("ParseTextHeader");
 
-        InputBasePath = config["InputBasePath"] ?? InputBasePath;
-        OutputJsonPath = config["OutputJsonPath"] ?? OutputJsonPath;
-        OutputErrorsPath = config["OutputErrorsPath"] ?? OutputErrorsPath;
+        InputBasePath = WorkDir.Resolve(workRoot, config["InputBasePath"] ?? InputBasePath);
+        OutputJsonPath = WorkDir.Resolve(workRoot, config["OutputJsonPath"] ?? OutputJsonPath);
+        OutputErrorsPath = WorkDir.Resolve(workRoot, config["OutputErrorsPath"] ?? OutputErrorsPath);
 
         if (int.TryParse(config["Processing:MaxParallelism"], out var mp) && mp > 0)
             MaxParallelism = mp;

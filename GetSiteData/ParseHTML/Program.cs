@@ -32,18 +32,20 @@ internal partial class Program
         }
     }
 
-    // Читает свою секцию общего файла настроек конвейера.
+    // Читает свою секцию общего файла настроек конвейера; относительные пути
+    // собираются под общим корнем рабочих данных WorkRoot (works/…).
     private static void LoadConfiguration()
     {
-        var config = new ConfigurationBuilder()
+        var fullConfig = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
-            .Build()
-            .GetSection("ParseHTML");
+            .Build();
+        var workRoot = WorkDir.GetRoot(fullConfig);
+        var config = fullConfig.GetSection("ParseHTML");
 
-        OutputDirectory = config["InputPath"] ?? OutputDirectory;
-        DocumentsDirectory = config["DocumentsPath"] ?? DocumentsDirectory;
+        OutputDirectory = WorkDir.Resolve(workRoot, config["InputPath"] ?? OutputDirectory);
+        DocumentsDirectory = WorkDir.Resolve(workRoot, config["DocumentsPath"] ?? DocumentsDirectory);
     }
 
     private static void ProcessHtmlFiles()

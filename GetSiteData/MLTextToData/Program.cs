@@ -10,22 +10,26 @@ using CellsClassifier.Services;
 using GetSiteData.Common;
 using Microsoft.Extensions.Configuration;
 
-// Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «MLTextToData».
+// Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «MLTextToData»;
+// общий корень рабочих данных (WorkRoot) лежит на верхнем уровне файла.
 // Файл ищем рядом с исполняемым файлом: приложения конвейера лежат в одном каталоге
 // и запускаются из произвольного рабочего каталога.
-var config = new ConfigurationBuilder()
+var fullConfig = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false)
     .AddEnvironmentVariables()
     .AddCommandLine(args)
-    .Build()
-    .GetSection("MLTextToData");
+    .Build();
+var workRoot = WorkDir.GetRoot(fullConfig);
+var config = fullConfig.GetSection("MLTextToData");
 
 // Обязательные пути; «!» оправдан — отсутствие ключа должно валить запуск сразу.
-var inputRoot = config["InputRoot"]!;
-var cellsOutput = config["CellsOutputRoot"]!;
-var otherOutput = config["NonCellsOutputRoot"]!;
-var dbPath = config["DatabasePath"]!;
+// Рабочие данные — под общим корнем works/…; модель НЕ трогаем: data/model.zip —
+// часть поставки и лежит рядом с приложением, а не среди рабочих данных.
+var inputRoot = WorkDir.Resolve(workRoot, config["InputRoot"]!);
+var cellsOutput = WorkDir.Resolve(workRoot, config["CellsOutputRoot"]!);
+var otherOutput = WorkDir.Resolve(workRoot, config["NonCellsOutputRoot"]!);
+var dbPath = WorkDir.Resolve(workRoot, config["DatabasePath"]!);
 var modelPath = config["ModelPath"]!;
 var parallelDegree = int.Parse(config["ParallelDegree"] ?? "4");
 var threshold = config.GetValue<float>("PredictionThreshold");
