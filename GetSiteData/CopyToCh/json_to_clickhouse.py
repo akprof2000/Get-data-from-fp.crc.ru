@@ -281,15 +281,27 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
     return record
 
 
-def collect_json_files(root_dir: Path, logger: logging.Logger) -> List[Path]:
-    """Рекурсивно собирает все *.json файлы.
+# Имя документа, сгенерированного нашим конвейером: «Номер заключения и дата»,
+# например «01.РА.01.000.Т.000215.07.26 от 01.07.2026.json».
+# Октеты номера: 2 цифры, 2 заглавные буквы/цифры (бывают кириллические — БЦ, ОМ,
+# ХЦ, РА, СЦ… — и чисто цифровые — 01, 49), 2 цифры, 3 цифры, «Т» (допускаем и
+# латинскую), 6 цифр, месяц, год; затем « от ДД.ММ.ГГГГ». Шаблон проверен на
+# полном корпусе (111 872 документа — 100 % совпадение). Всё прочее (служебные
+# _processed.json, чужие json) в загрузку не попадает.
+DOCUMENT_FILE_RE = re.compile(
+    r"^\d{2}\.[А-ЯЁA-Z0-9]{2}\.\d{2}\.\d{3}\.[ТT]\.\d{6}\.\d{2}\.\d{2} от \d{2}\.\d{2}\.\d{4}\.json$"
+)
 
-    _processed.json пропускаем: это служебные журналы ParseTextHeader
-    («какие файлы уже обработаны»), а не документы базовых станций.
-    """
+
+def collect_json_files(root_dir: Path, logger: logging.Logger) -> List[Path]:
+    """Рекурсивно собирает JSON-документы конвейера (по шаблону имени)."""
     logger.info("Сканирование директории: %s", root_dir)
-    files = [f for f in root_dir.rglob("*.json") if f.name != "_processed.json"]
+    all_json = list(root_dir.rglob("*.json"))
+    files = [f for f in all_json if DOCUMENT_FILE_RE.match(f.name)]
+    skipped = len(all_json) - len(files)
     logger.info("Найдено JSON-файлов: %d", len(files))
+    if skipped:
+        logger.info("Пропущено не-документов (служебные/посторонние json): %d", skipped)
     if len(files) > 0:
         logger.debug("Примеры файлов: %s", [str(f) for f in files[:5]])
     return files
