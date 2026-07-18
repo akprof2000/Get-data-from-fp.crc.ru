@@ -117,12 +117,46 @@ internal partial class Program
         int totalPages = ExtractTotalPages(initialResult);
         Log.Info($"{searchTerm} {month:yyyyMM}: всего страниц — {totalPages}");
 
+        // Быстрая проверка полноты: если локально уже лежит столько же документов,
+        // сколько отдаёт сайт, месяц пропускаем целиком — 1-2 запроса вместо
+        // перекачивания всех страниц выдачи (повторные прогоны на порядок быстрее).
+        // Точное число документов = (страниц − 1) × докс на первой + докс на последней:
+        // все страницы, кроме последней, заполнены одинаково.
+        int existing = Directory.EnumerateFiles(outputPath, "*.html").Count();
+        int firstPageCount = DocumentMarkerRx().Count(initialResult);
+        string? lastPageResult = null;
+        if (existing > 0)
+        {
+            int lastPageCount = firstPageCount;
+            if (totalPages > 1)
+            {
+                lastPageResult = await FetchPageWithRetryAsync(searchTerm, month, totalPages, CancellationToken.None);
+                lastPageCount = DocumentMarkerRx().Count(lastPageResult);
+            }
+
+            int expected = (totalPages - 1) * firstPageCount + lastPageCount;
+            if (existing >= expected)
+            {
+                Log.Skip($"{searchTerm} {month:yyyyMM}: локально уже {existing} из {expected} документов — месяц пропущен.");
+                return;
+            }
+
+            Log.Info($"{searchTerm} {month:yyyyMM}: локально {existing} из {expected} — докачиваю.");
+        }
+
         int saved = SaveDocuments(initialResult, outputPath);
+        // Последнюю страницу могли уже скачать при проверке полноты — не качаем повторно.
+        if (lastPageResult is not null)
+        {
+            saved += SaveDocuments(lastPageResult, outputPath);
+        }
+
+        int lastToFetch = lastPageResult is null ? totalPages : totalPages - 1;
 
         // Остальные страницы качаем параллельно с ограничением степени.
         ParallelOptions parallelOptions = new() { MaxDegreeOfParallelism = _parallelism };
         int savedRest = 0;
-        await Parallel.ForAsync(2, totalPages + 1, parallelOptions, async (pageIndex, cancellationToken) =>
+        await Parallel.ForAsync(2, lastToFetch + 1, parallelOptions, async (pageIndex, cancellationToken) =>
         {
             string result = await FetchPageWithRetryAsync(searchTerm, month, pageIndex, cancellationToken);
             _ = Interlocked.Add(ref savedRest, SaveDocuments(result, outputPath));
