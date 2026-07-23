@@ -82,8 +82,20 @@ public static partial class CoordinateParser
     [GeneratedRegex(@"(\d{2,3}[\.,]\d+)°?\s*(с\.ш\.|ю\.ш\.|n|s)[,;\s]+(\d{2,3}[\.,]\d+)°?\s*(в\.д\.|з\.д\.|e|w)", RegexOptions.IgnoreCase)]
     private static partial Regex DecDirRx();
 
+    // «ш.: 55.772190, д.: 37.678168» — метки-направления ПЕРЕД числами (77-01-09, WGS84)
+    [GeneratedRegex(@"ш\.?\s*:\s*(\d{2,3}[\.,]\d{4,})[,;\s]+д\.?\s*:\s*(\d{2,3}[\.,]\d{4,})", RegexOptions.IgnoreCase)]
+    private static partial Regex LabeledLatLonRx();
+
+    // «55. 772190» — пробел после десятичной точки (встречается в поле «Проектная
+    // документация», видимо после автопереноса). Склеиваем только когда за точкой
+    // идёт длинная дробная часть (4+ цифр) — обычные «д. 4» и даты не трогаются.
+    [GeneratedRegex(@"(\d)\.\s+(\d{4,})")]
+    private static partial Regex SpacedDecimalRx();
+
     public static string? Extract(string fullText)
     {
+        // Нормализуем разорванные пробелом десятичные дроби: «ш. : 55. 772190» → «ш. : 55.772190».
+        fullText = SpacedDecimalRx().Replace(fullText, "$1.$2");
         // Сначала пробуем после метки «Географические координаты» — самый надёжный контекст.
         var labelMatch = GeoLabelRx().Match(fullText);
         if (labelMatch.Success)
@@ -106,7 +118,8 @@ public static partial class CoordinateParser
 
     private static string? TryParseLine(string text)
     {
-        return TryDecimalDegrees(text)
+        return TryLabeledLatLon(text)
+            ?? TryDecimalDegrees(text)
             ?? TryDecimalWithDirection(text)
             ?? TryDmsWithSeparateDirection(text)
             ?? TryDmsCompact(text);
@@ -123,6 +136,20 @@ public static partial class CoordinateParser
     /// <summary>Разбирает строку с запятой или точкой как десятичным разделителем.</summary>
     private static bool TryParseCoord(string s, out double value) =>
         double.TryParse(s.Replace(',', '.').Replace(" ", ""), NumberStyles.Float, Inv, out value);
+
+    // «ш.: 55.772190, д.: 37.678168» — метки-направления перед числами (77-01-09)
+    private static string? TryLabeledLatLon(string text)
+    {
+        var m = LabeledLatLonRx().Match(text);
+        if (m.Success
+            && TryParseCoord(m.Groups[1].Value, out var lat)
+            && TryParseCoord(m.Groups[2].Value, out var lon))
+        {
+            return FormatIfValid(lat, lon);
+        }
+
+        return null;
+    }
 
     // Десятичные градусы: «54.03436288, 85.89949510», «(53.563167, 49.397336)»,
     // «(53.540542°, 49.342503°)», «Широта: 54,719556°…»
