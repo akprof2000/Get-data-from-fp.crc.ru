@@ -8,8 +8,8 @@
 
   <ItemGroup>
     <!-- Логирование: NLog, конфигурация — секция «NLog» общего appsettings.json. -->
-    <PackageReference Include="NLog.Extensions.Logging" Version="6.0.4" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.9" />
+    <PackageReference Include="NLog.Extensions.Logging" Version="6.1.4" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.10" />
   </ItemGroup>
 
 </Project>
