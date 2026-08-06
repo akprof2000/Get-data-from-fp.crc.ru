@@ -1,0 +1,114 @@
+name: Release
+
+# Релиз выпускается по тегу vX.Y.Z (или вручную с указанием версии).
+# Собираются четыре архива — два варианта поставки × две платформы:
+#   standalone — со встроенным .NET (ставить ничего не нужно)
+#   compact    — приложения + библиотеки, нужен .NET 10 Runtime
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза без префикса v (например 1.4.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  # Все четыре приложения конвейера кладутся в ОДИН каталог поставки.
+  PROJECTS: 'GetSiteData ParseHTML MLTextToData ParseTextHeader'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, linux-x64]
+        kind: [standalone, compact]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Определить версию
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Публикация всех приложений в один каталог
+        run: |
+          out="publish/${{ matrix.kind }}-${{ matrix.rid }}"
+          # standalone — самодостаточный один файл на приложение;
+          # compact — обычная framework-dependent поставка с библиотеками рядом.
+          if [ "${{ matrix.kind }}" = "standalone" ]; then
+            extra="--self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true"
+          else
+            extra="--self-contained false"
+          fi
+          for p in $PROJECTS; do
+            dotnet publish "GetSiteData/$p/$p.csproj" \
+              -c Release -r ${{ matrix.rid }} $extra -o "$out"
+          done
+          # PDB в поставке не нужны и заметно её утяжеляют.
+          find "$out" -name '*.pdb' -delete
+
+      - name: Упаковать архив
+        id: pack
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          dir="publish/${{ matrix.kind }}-${{ matrix.rid }}"
+          base="GetDataFpCrcRu-v$v-${{ matrix.kind }}-${{ matrix.rid }}"
+          mkdir -p dist
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then
+            (cd "$dir" && zip -qr "../../dist/$base.zip" .)
+            echo "asset=dist/$base.zip" >> "$GITHUB_OUTPUT"
+          else
+            # Исполняемые файлы Linux после кросс-публикации теряют бит +x.
+            for p in $PROJECTS; do chmod +x "$dir/$p" 2>/dev/null || true; done
+            chmod +x "$dir/run-pipeline.sh" 2>/dev/null || true
+            tar czf "dist/$base.tar.gz" -C "$dir" .
+            echo "asset=dist/$base.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.kind }}-${{ matrix.rid }}
+          path: ${{ steps.pack.outputs.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Создать релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            tag="v${{ github.event.inputs.version }}"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          gh release create "$tag" dist/* \
+            --title "$tag" \
+            --generate-notes
