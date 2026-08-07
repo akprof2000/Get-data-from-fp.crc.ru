@@ -93,22 +93,51 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 — нужны вся история и теги: описание релиза собирается
+      # из аннотации тега и списка коммитов с предыдущего тега.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
-      - name: Создать релиз
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Собрать описание релиза
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
             tag="v${{ github.event.inputs.version }}"
           else
             tag="$GITHUB_REF_NAME"
           fi
+          echo "tag=$tag" >> "$GITHUB_ENV"
+
+          # Аннотация тега — основное описание релиза (что и зачем сделано).
+          # --generate-notes здесь не годится: он строит «What's Changed» из
+          # pull request'ов, а коммиты идут прямо в main, и раздел выходит пустым.
+          git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$tag" > notes.md
+
+          prev=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
+          {
+            echo
+            echo '## Коммиты'
+            if [ -n "$prev" ]; then
+              git log --no-merges --pretty='- %s' "$prev..$tag"
+            else
+              git log --no-merges --pretty='- %s' "$tag"
+            fi
+            echo
+            if [ -n "$prev" ]; then
+              echo "**Полный список изменений**: ${{ github.server_url }}/${{ github.repository }}/compare/$prev...$tag"
+            fi
+          } >> notes.md
+          echo '--- notes.md ---'; cat notes.md
+
+      - name: Создать релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release create "$tag" dist/* \
             --title "$tag" \
-            --generate-notes
+            --notes-file notes.md

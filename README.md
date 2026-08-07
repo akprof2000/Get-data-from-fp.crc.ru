@@ -283,7 +283,7 @@ python json_to_clickhouse.py --input-dir works/OutputJson
 <summary>🐧 <b>Linux</b></summary>
 
 ```bash
-tar xzf GetDataFpCrcRu-v1.4.1-standalone-linux-x64.tar.gz
+tar xzf GetDataFpCrcRu-v1.4.2-standalone-linux-x64.tar.gz
 
 # 1. Настроить период и термины (секция GetSiteData)
 nano appsettings.json
