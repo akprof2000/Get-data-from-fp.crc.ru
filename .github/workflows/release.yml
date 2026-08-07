@@ -138,6 +138,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$tag" dist/* \
-            --title "$tag" \
-            --notes-file notes.md
+          # Идемпотентно: повторный прогон по тому же тегу (например, после
+          # перезаписи аннотации или перезапуска упавшего задания) не должен
+          # падать на «release already exists» — просто обновляем существующий.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Релиз $tag уже существует — обновляем описание и файлы."
+            gh release edit "$tag" --title "$tag" --notes-file notes.md
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --notes-file notes.md
+          fi

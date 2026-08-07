@@ -1,5 +1,11 @@
 # 📡 Get data from fp.crc.ru
 
+[![CI](https://img.shields.io/github/actions/workflow/status/akprof2000/Get-data-from-fp.crc.ru/release.yml?label=CI&logo=githubactions&logoColor=white)](https://github.com/akprof2000/Get-data-from-fp.crc.ru/actions/workflows/release.yml)
+[![Релиз](https://img.shields.io/github/v/release/akprof2000/Get-data-from-fp.crc.ru?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&logo=github&color=success)](https://github.com/akprof2000/Get-data-from-fp.crc.ru/releases/latest)
+[![Загрузки](https://img.shields.io/github/downloads/akprof2000/Get-data-from-fp.crc.ru/total?label=%D0%B7%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8&logo=docusign&logoColor=white&color=blue)](https://github.com/akprof2000/Get-data-from-fp.crc.ru/releases)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/download/dotnet/10.0)
+[![Лицензия](https://img.shields.io/github/license/akprof2000/Get-data-from-fp.crc.ru?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F&color=lightgrey)](LICENSE)
+
 Конвейер сбора и разбора санитарно-эпидемиологических заключений (СЭЗ) о базовых станциях сотовой связи из открытого реестра [fp.crc.ru](https://fp.crc.ru/). На выходе — структурированные JSON: номер станции, адрес, координаты, оператор.
 
 > 🎯 **Задача:** превратить сотни тысяч слабоструктурированных HTML-страниц реестра в чистый набор данных о размещении базовых станций по всей России.
@@ -283,7 +289,7 @@ python json_to_clickhouse.py --input-dir works/OutputJson
 <summary>🐧 <b>Linux</b></summary>
 
 ```bash
-tar xzf GetDataFpCrcRu-v1.4.2-standalone-linux-x64.tar.gz
+tar xzf GetDataFpCrcRu-v1.4.3-standalone-linux-x64.tar.gz
 
 # 1. Настроить период и термины (секция GetSiteData)
 nano appsettings.json
@@ -472,4 +478,10 @@ logs/ParseTextHeader.log
 
 - 🐢 Параллелизм запросов к сайту намеренно ограничен — реестр публичный, не перегружаем.
 - 🔁 Все этапы идемпотентны: повторный запуск докачивает/дообрабатывает только новое.
-- 🧪 Изменения регулярных выражений проверяются регрессионно на полном корпусе (111 917 документов).
+- 🧪 Изменения регулярных выражений проверяются регрессионно на полном корпусе (146 484 документа).
+
+---
+
+## 📄 Лицензия
+
+Проект распространяется по лицензии [MIT](LICENSE) — свободно используйте, изменяйте и распространяйте, сохраняя указание авторства.
