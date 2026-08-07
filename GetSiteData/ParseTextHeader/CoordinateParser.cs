@@ -57,7 +57,9 @@ public static partial class CoordinateParser
     // «N 52°02'23.10" E113°28'26.50"» — латинское направление ПЕРЕД значением (75-ОЦ-05).
     // Без RegexOptions.IgnoreCase: строчная «n»/«e» — обычные буквы русского текста рядом
     // с числами («…на 52°…»), а заглавная в этой позиции почти всегда значит направление.
-    [GeneratedRegex(@"\bN\s*(\d{1,3})°\s*(\d{1,2})\s*'\s*\.?(\d+(?:[.,]\d+)?)""")]
+    // Терминатором секунд, кроме кавычки, бывает лишний знак градуса:
+    // «N55°10'18.7 °, Е61°33'18.9"» (74-50-03).
+    [GeneratedRegex(@"\bN\s*(\d{1,3})°\s*(\d{1,2})\s*'\s*\.?(\d+(?:\s*[.,]\s*\d+)?)\s*[""°]")]
     private static partial Regex LatDmsEnPrefixRx();
 
     // Долгота в DMS: «В.Д. 94°22'43.6"» / «94°22'43.6"E»
@@ -79,7 +81,9 @@ public static partial class CoordinateParser
     // \s* перед знаком градуса — координата бывает разорвана переносом строки
     // («координаты: 42\n°59'20.7" с.ш.», 05-01-02-14); кавычка секунд необязательна
     // («55°56'23,4 в.д.», 02-БЦ-01) — от ложных срабатываний защищает обязательная метка направления.
-    [GeneratedRegex(@"(\d{1,3})\s*°\s*(\d{1,2})\s*'\s*\.?(\d+(?:[.,]\d+)?)\s*""?[)\s]*([СсCcNnюЮSs]\.?\s*[Шш]?\.?)[,;\s]+(\d{2,3})\s*°\s*(\d{1,2})\s*'\s*\.?(\d+(?:[.,]\d+)?)\s*""?[)\s]*([ВвEeЕеЗзWw]\.?\s*[Дд]?\.?)", RegexOptions.IgnoreCase)]
+    // Разделителем пары бывает «/»: «45°02'02" С.Ш. / 39°00'21" В.Д.» (23-КК-10);
+    // дробная часть секунд бывает разорвана пробелом: «55°48'27. 25" с. ш.» (77-01-09).
+    [GeneratedRegex(@"(\d{1,3})\s*°\s*(\d{1,2})\s*'\s*\.?(\d+(?:\s*[.,]\s*\d+)?)\s*""?[)\s]*([СсCcNnюЮSs]\.?\s*[Шш]?\.?)[,;/\s]+(\d{2,3})\s*°\s*(\d{1,2})\s*'\s*\.?(\d+(?:\s*[.,]\s*\d+)?)\s*""?[)\s]*([ВвEeЕеЗзWw]\.?\s*[Дд]?\.?)", RegexOptions.IgnoreCase)]
     private static partial Regex DmsCompactRx();
 
     // «55-25-47 с.ш.; 65-18-27 в.д.» — дефисы вместо символов градусов/минут.
@@ -102,8 +106,72 @@ public static partial class CoordinateParser
 
     // «51.715914 с.ш., 94.383377 в.д.» — десятичные с текстовым направлением.
     // Завершающая точка в метке необязательна: «(42.570164 с.ш. 47.193683 в.д)» (05-01-01-33).
-    [GeneratedRegex(@"(\d{2,3}[\.,]\d+)°?\s*(с\.ш\.?|ю\.ш\.?|n|s)[,;\s]+(\d{2,3}[\.,]\d+)°?\s*(в\.д\.?|з\.д\.?|e|w)", RegexOptions.IgnoreCase)]
+    // Между числом и меткой допускаем «мусорный» знак градуса: «57.736217"с.ш.» (44-КЦ-01),
+    // «45.039167°" с.ш.» (26-01-05), «44.862051о с.ш.» — русская «о» вместо ° (23-КК-10).
+    // Разделителем пары бывает «/»: «43.575323 С.Ш./ 44.06378 В.Д)» (07-01-04).
+    // Между числом и меткой бывает вставка со «вторым мнением» — та же координата
+    // градусами-минутами-секундами: «43.240200 (43°14'24.7") с. ш. 45.066600 …» (06-ИЦ-01).
+    [GeneratedRegex(@"(\d{2,3}[\.,]\d+)\s*(?:\([^)]{5,30}\))?\s*[°""'оО]*\s*(с\.ш\.?|ю\.ш\.?|n|s)[,;/\s]+(\d{2,3}[\.,]\d+)\s*(?:\([^)]{5,30}\))?\s*[°""'оО]*\s*(в\.д\.?|з\.д\.?|e|w)", RegexOptions.IgnoreCase)]
     private static partial Regex DecDirRx();
+
+    // «СШ: 43°10'18.3" ВД: 132°04'59.4"» (25-ПЦ-01), «Ш: 56° 16' 48.6" Д:30° 31' 40.4"» (60-01-06),
+    // «широта 53°48'28.4", долгота 88°12'10.1"» (42-21-02) — метка стоит ПЕРЕД градусами
+    // и записана без точек, поэтому под шаблоны с «с.ш.» не подходила.
+    [GeneratedRegex(@"(?:СШ|Ш|широта)\s*:?\s*(\d{1,3})\s*°\s*(\d{1,2})\s*'\s*(\d+(?:[.,]\d+)?)\s*""?[,;\s]*(?:ВД|Д|долгота)\s*:?\s*(\d{2,3})\s*°\s*(\d{1,2})\s*'\s*(\d+(?:[.,]\d+)?)\s*""?", RegexOptions.IgnoreCase)]
+    private static partial Regex LabeledDmsRx();
+
+    // «Координаты WGS широта 51.495996°, WGS долгота 38.626761°» (36-ВЦ-20) — то же,
+    // но в десятичных градусах.
+    [GeneratedRegex(@"широта\s*:?\s*(\d{2,3}[.,]\d{4,})\s*°?[,;\s]*(?:WGS\s*)?долгота\s*:?\s*(\d{2,3}[.,]\d{4,})", RegexOptions.IgnoreCase)]
+    private static partial Regex LabeledDecRx();
+
+    // «62.072731N, 42.790079Е» (29-01-02) — латинские/кириллические буквы направления
+    // ВПЛОТНУЮ за числом. Кириллическая «Е» неотличима от латинской «E».
+    [GeneratedRegex(@"(\d{2,3}[.,]\d{4,})\s*°?\s*[NnСс][,;\s]+(\d{2,3}[.,]\d{4,})\s*°?\s*[EeЕе]")]
+    private static partial Regex DecDirSuffixRx();
+
+    // «N50.69295729 Е37.14713081» (31-БО-16), «N55,941756° Е60,806280°» (74-50-03) —
+    // буква направления вплотную ПЕРЕД числом, без пробела.
+    [GeneratedRegex(@"[NnСс]\s*(\d{2,3}[.,]\d{4,})\s*°?[,;\s]+[EeЕе]\s*(\d{2,3}[.,]\d{4,})\s*°?")]
+    private static partial Regex DecDirPrefixGluedRx();
+
+    // «57.728227°С- 40.897347°В» (44-КЦ-01) — однобуквенные метки после знака градуса.
+    [GeneratedRegex(@"(\d{2,3}[.,]\d{4,})\s*°\s*[СC]\s*[-–—]?\s*(\d{2,3}[.,]\d{4,})\s*°\s*[ВB]")]
+    private static partial Regex DecShortDirRx();
+
+    // «координаты: 44°59'47.000", 38°55'29.600"» — пара «градусы-минуты-секунды» БЕЗ меток
+    // направления вообще (23-КК-10, 81-99-01, 46-01-12 — сотни документов). Самый широкий
+    // шаблон, поэтому применяется последним и только если пара проходит проверку диапазонов
+    // территории РФ: у азимутов и секторов ЗОЗ («в секторе 196,15°-199,85°») нет минут и
+    // секунд, а случайная пара «градус-минута-секунда» из техтекста в диапазон не попадёт.
+    // Дробная часть секунд бывает разорвана пробелом: «38°5'31. 70"» (23-КК-10),
+    // «55°48'27. 25"» (77-01-09). Терминатором секунд, кроме кавычки, изредка
+    // оказывается ещё один знак градуса: «N55°10'18.7 °» (74-50-03).
+    [GeneratedRegex(@"(\d{1,3})\s*°\s*(\d{1,2})\s*'\s*(\d+(?:\s*[.,]\s*\d+)?)\s*[""°][,;/\s]+(\d{2,3})\s*°\s*(\d{1,2})\s*'\s*(\d+(?:\s*[.,]\s*\d+)?)\s*[""°]")]
+    private static partial Regex DmsBareRx();
+
+    // «43.232426*, 46.869779*» (05-01-02) — десятичная пара со знаком градуса, но
+    // вообще без меток направления.
+    [GeneratedRegex(@"(\d{2,3}[.,]\d{4,})\s*[°*][,;/\s]+(\d{2,3}[.,]\d{4,})\s*[°*]")]
+    private static partial Regex DecBareDegRx();
+
+    // «51.498222 (51°29'53.6") / 46.125556 (46°7'32.0")» (64-01-02),
+    // «53.344444 (53°20'40.0"); 59.063861 (59°3'49.9")» (74-50-03) — десятичная пара,
+    // у каждой координаты в скобках продублирована запись градусами-минутами-секундами.
+    [GeneratedRegex(@"(\d{2,3}\.\d{4,})\s*\([^)]{5,30}\)\s*[,;/]\s*(\d{2,3}\.\d{4,})\s*\([^)]{5,30}\)")]
+    private static partial Regex DecWithDmsInParensRx();
+
+    // «координаты объекта 52,118250, 47,200283» (64-01-02) — запятая и как десятичный
+    // разделитель, и как разделитель пары. Требуем 5+ знаков дробной части: у обычных
+    // чисел техтекста («мощность 20,5 Вт») такой точности не бывает.
+    [GeneratedRegex(@"(\d{2,3},\d{5,})\s*,\s*(\d{2,3},\d{5,})")]
+    private static partial Regex DecCommaPairRx();
+
+    // «N51.1810.02 Е37.5407.29» (31-БО-16) — потерянные знаки градуса и минуты: это
+    // 51°18'10.02" и 37°54'07.29". После точки идут слитно минуты и целые секунды,
+    // затем точка и дробная часть. Опознаётся по букве направления вплотную перед числом.
+    [GeneratedRegex(@"[NnСс](\d{2,3})\.(\d{2})(\d{2})\.(\d{1,2})\s+[EeЕе](\d{2,3})\.(\d{2})(\d{2})\.(\d{1,2})")]
+    private static partial Regex DottedDmsRx();
 
     // «ш.: 55.772190, д.: 37.678168» — метки-направления ПЕРЕД числами (77-01-09, WGS84)
     [GeneratedRegex(@"ш\.?\s*:\s*(\d{2,3}[\.,]\d{4,})[,;\s]+д\.?\s*:\s*(\d{2,3}[\.,]\d{4,})", RegexOptions.IgnoreCase)]
@@ -119,6 +187,26 @@ public static partial class CoordinateParser
     // число (минуты) или метка направления, чтобы не трогать сноски и «*» из таблиц.
     [GeneratedRegex(@"(\d)\s*\*(?=\s*(?:\d|[сcСCвВbBnNeEЕе]))")]
     private static partial Regex StarDegreeRx();
+
+    // «60?43?07.2''с.ш. 114?56'25.7''в.д.» (14-01-01) — знаки градуса и минуты потерялись
+    // при перекодировке и стали «?». Восстанавливаем только в связке «число?число?число»
+    // или «число?число'», то есть внутри координаты, а не в обычном тексте с вопросами.
+    [GeneratedRegex(@"(\d{1,3})\?(\d{1,2})\?(?=\d)")]
+    private static partial Regex QuestionDmsRx();
+
+    [GeneratedRegex(@"(\d{1,3})\?(?=\d{1,2}\s*')")]
+    private static partial Regex QuestionDegreeRx();
+
+    // «44.862051о с.ш.» (23-КК-10) — русская «о» вместо знака градуса. Меняем только
+    // перед меткой направления, иначе пострадают обычные слова, начинающиеся с «о».
+    [GeneratedRegex(@"(\d)\s*[оО](?=\s*[сcюСЮвВзЗ]\s*\.?\s*[шШдД])")]
+    private static partial Regex RuOhDegreeRx();
+
+    // «6Г18'56.7"Е» (74-50-03) — распознаватель прочитал «1°» как «Г»: это 61°18'56.7".
+    // Замена узкая: только между цифрой и парой «минуты-апостроф», и результат всё равно
+    // проходит проверку диапазонов, поэтому ошибочная подстановка не попадёт в вывод.
+    [GeneratedRegex(@"(\d)Г(?=\d{1,2}\s*'\s*\d)")]
+    private static partial Regex OcrGeDegreeRx();
 
     // Метки направления с латинскими и «соседними по клавиатуре» буквами и лишними пробелами:
     // «c.ш.» (латинская c), «с. ш.», «с.щ.» (щ вместо ш) — всё приводим к «с.ш.» / «в.д.» и т.п.
@@ -139,8 +227,31 @@ public static partial class CoordinateParser
         fullText = NormalizeMarks(fullText);
         // Нормализуем разорванные пробелом десятичные дроби: «ш. : 55. 772190» → «ш. : 55.772190».
         fullText = SpacedDecimalRx().Replace(fullText, "$1.$2");
+
+        // Сначала — раздел «Проектная документация»: там назван предмет заключения, то есть
+        // та самая станция. Дальше по тексту попадаются координаты соседних станций и
+        // прямые ошибки копирования: в 02-БЦ-01-002246 заголовок описывает станцию в Уфе
+        // «(54.77908 56.031667)», а ниже стоит «координаты 55°24'32.54", 56°37'15.42"»
+        // (деревня Яман-Порт) — по метке нашлась бы именно она.
+        var projStart = fullText.IndexOf("Проектная документация", StringComparison.OrdinalIgnoreCase);
+        if (projStart >= 0)
+        {
+            var projEnd = fullText.IndexOf("СООТВЕТСТВУЕТ", projStart, StringComparison.OrdinalIgnoreCase);
+            var slice = projEnd > projStart
+                ? fullText[projStart..projEnd]
+                : fullText[projStart..Math.Min(projStart + 1500, fullText.Length)];
+            var fromProj = ExtractFrom(slice);
+            if (fromProj != null) return fromProj;
+        }
+
+        return ExtractFrom(fullText);
+    }
+
+    /// <summary>Ищет координаты в переданном фрагменте: сначала по меткам, затем по всему тексту.</summary>
+    private static string? ExtractFrom(string text)
+    {
         // Сначала пробуем после метки «Географические координаты» — самый надёжный контекст.
-        var labelMatch = GeoLabelRx().Match(fullText);
+        var labelMatch = GeoLabelRx().Match(text);
         if (labelMatch.Success)
         {
             var fromLabel = TryParseLine(labelMatch.Groups[1].Value.Trim());
@@ -148,15 +259,15 @@ public static partial class CoordinateParser
         }
 
         // Потом рядом с более коротким «Координаты».
-        var coordLabelMatch = CoordLabelRx().Match(fullText);
+        var coordLabelMatch = CoordLabelRx().Match(text);
         if (coordLabelMatch.Success)
         {
             var fromLabel = TryParseLine(coordLabelMatch.Groups[1].Value.Trim());
             if (fromLabel != null) return fromLabel;
         }
 
-        // И как фоллбэк — по всему тексту.
-        return TryParseLine(fullText);
+        // И как фоллбэк — по всему фрагменту.
+        return TryParseLine(text);
     }
 
     private static string? TryParseLine(string text)
@@ -167,8 +278,12 @@ public static partial class CoordinateParser
         return TryLabeledLatLon(text)
             ?? TryDecimalDegrees(text)
             ?? TryDecimalWithDirection(text)
+            ?? TryLabeledDms(text)
             ?? TryDmsCompact(text)
-            ?? TryDmsWithSeparateDirection(text);
+            ?? TryDmsWithSeparateDirection(text)
+            // Пара без меток направления — последняя попытка: шаблон самый широкий,
+            // и запускать его стоит, только когда все явные формы записи не подошли.
+            ?? TryDmsBare(text);
     }
 
     /// <summary>
@@ -190,6 +305,10 @@ public static partial class CoordinateParser
                    .Replace('“', '"');  // “
 
         text = StarDegreeRx().Replace(text, "$1°");
+        text = QuestionDmsRx().Replace(text, "$1°$2'");
+        text = QuestionDegreeRx().Replace(text, "$1°");
+        text = RuOhDegreeRx().Replace(text, "$1°");
+        text = OcrGeDegreeRx().Replace(text, "${1}1°");
         text = DirNorthRx().Replace(text, "с.ш.");
         text = DirEastRx().Replace(text, "в.д.");
         text = DirSouthRx().Replace(text, "ю.ш.");
@@ -309,7 +428,9 @@ public static partial class CoordinateParser
     // и слитные/скобочные варианты (см. паттерны ColonDir/ParenDir/GluedDir).
     private static string? TryDecimalWithDirection(string text)
     {
-        foreach (var rx in (ReadOnlySpan<Regex>)[ColonDirRx(), ParenDirRx(), GluedDirRx()])
+        foreach (var rx in (ReadOnlySpan<Regex>)[
+                     ColonDirRx(), ParenDirRx(), GluedDirRx(), LabeledDecRx(),
+                     DecDirSuffixRx(), DecDirPrefixGluedRx(), DecShortDirRx()])
         {
             var m2 = rx.Match(text);
             if (m2.Success
@@ -333,6 +454,63 @@ public static partial class CoordinateParser
         return $"{lat.ToString(Inv)}, {lon.ToString(Inv)}";
     }
 
+    // «СШ: 43°10'18.3" ВД: 132°04'59.4"» / «широта 53°48'28.4", долгота 88°12'10.1"» —
+    // метка направления словом или одной буквой ПЕРЕД значением.
+    private static string? TryLabeledDms(string text)
+    {
+        foreach (Match m in LabeledDmsRx().Matches(text))
+        {
+            double? lat = DmsToDec(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value);
+            double? lon = DmsToDec(m.Groups[4].Value, m.Groups[5].Value, m.Groups[6].Value);
+            if (lat is null || lon is null) continue;
+            var formatted = FormatIfValid(lat.Value, lon.Value);
+            if (formatted != null) return formatted;
+        }
+        return null;
+    }
+
+    // Пары координат без каких-либо меток направления: «координаты: 44°59'47.000",
+    // 38°55'29.600"», «43.232426*, 46.869779*», «52,118250, 47,200283».
+    // Диапазонная проверка здесь не «санитарная», а единственная защита от ложных
+    // срабатываний, поэтому перебираем все совпадения и возвращаем первое правдоподобное.
+    private static string? TryDmsBare(string text)
+    {
+        // Запись с потерянными знаками градуса/минуты — у неё секунды разнесены
+        // по двум группам («…1810.02» → 10 целых и 02 дробных).
+        foreach (Match m in DottedDmsRx().Matches(text))
+        {
+            double? lat = DmsToDec(m.Groups[1].Value, m.Groups[2].Value, $"{m.Groups[3].Value}.{m.Groups[4].Value}");
+            double? lon = DmsToDec(m.Groups[5].Value, m.Groups[6].Value, $"{m.Groups[7].Value}.{m.Groups[8].Value}");
+            if (lat is null || lon is null) continue;
+            var formatted = FormatIfValid(lat.Value, lon.Value);
+            if (formatted != null) return formatted;
+        }
+
+        foreach (Match m in DmsBareRx().Matches(text))
+        {
+            double? lat = DmsToDec(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value);
+            double? lon = DmsToDec(m.Groups[4].Value, m.Groups[5].Value, m.Groups[6].Value);
+            if (lat is null || lon is null) continue;
+            var formatted = FormatIfValid(lat.Value, lon.Value);
+            if (formatted != null) return formatted;
+        }
+
+        foreach (var rx in (ReadOnlySpan<Regex>)[DecWithDmsInParensRx(), DecBareDegRx(), DecCommaPairRx()])
+        {
+            foreach (Match m in rx.Matches(text))
+            {
+                if (TryParseCoord(m.Groups[1].Value, out var lat)
+                    && TryParseCoord(m.Groups[2].Value, out var lon))
+                {
+                    var formatted = FormatIfValid(lat, lon);
+                    if (formatted != null) return formatted;
+                }
+            }
+        }
+
+        return null;
+    }
+
     // Перевод «градусы/минуты/секунды» в десятичные градусы.
     // Возвращает null вместо исключения при некорректном числе (опечатки в исходных
     // документах, например «.29.1» вместо «29.1» — лишний разделитель). Раньше здесь
@@ -341,7 +519,10 @@ public static partial class CoordinateParser
     {
         if (!int.TryParse(deg, out int d)) return null;
         if (!int.TryParse(min, out int mi)) return null;
-        if (!double.TryParse(sec.Replace(',', '.'), NumberStyles.Float, Inv, out double s)) return null;
+        // Пробел внутри дробной части секунд — частый артефакт вёрстки: «27. 25"»,
+        // «31. 70"» (77-01-09, 23-КК-10). Без очистки double.TryParse возвращал false
+        // и координата терялась целиком.
+        if (!double.TryParse(sec.Replace(" ", "").Replace(',', '.'), NumberStyles.Float, Inv, out double s)) return null;
         // Минуты и секунды в DMS всегда < 60. Без проверки случай «44'.97"» (лишняя точка +
         // пропущенная цифра) тихо давал бы 97 «секунд» — физически невозможное значение (86-ХЦ-23).
         // Ровно 60 секунд — не опечатка, а огрубление в исходнике («53°27'60"», 02-БЦ-01):
