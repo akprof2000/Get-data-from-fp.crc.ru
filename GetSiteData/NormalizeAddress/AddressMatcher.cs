@@ -248,8 +248,8 @@ public sealed partial class AddressMatcher
 
             if (region == null && (kind is Kind.Region or Kind.Unknown))
             {
-                if (_regionsByKey.TryGetValue(nameKey, out var rn)
-                    || SignificantWordLookup(nameKey, out rn))
+                if ((_regionsByKey.TryGetValue(nameKey, out var rn)
+                    || SignificantWordLookup(nameKey, out rn)) && rn != null)
                 {
                     region = rn;
                     // «Чувашская Республика- Чувашия г. Чебоксары» — сегмент склеен без

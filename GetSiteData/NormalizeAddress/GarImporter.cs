@@ -42,6 +42,30 @@ public static partial class GarImporter
         catch (SqliteException) { return 0; }   // старая база без таблицы meta
     }
 
+    public static string? GetMeta(string dbPath, string key)
+    {
+        if (!File.Exists(dbPath)) return null;
+        using var db = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        db.Open();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT value FROM meta WHERE key=$k";
+        cmd.Parameters.AddWithValue("$k", key);
+        try { return cmd.ExecuteScalar() as string; }
+        catch (SqliteException) { return null; }
+    }
+
+    public static void SetMeta(string dbPath, string key, string value)
+    {
+        using var db = new SqliteConnection($"Data Source={dbPath}");
+        db.Open();
+        Exec(db, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)");
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "INSERT OR REPLACE INTO meta VALUES ($k, $v)";
+        cmd.Parameters.AddWithValue("$k", key);
+        cmd.Parameters.AddWithValue("$v", value);
+        cmd.ExecuteNonQuery();
+    }
+
     public static void SetDbVersion(string dbPath, long versionId)
     {
         using var db = new SqliteConnection($"Data Source={dbPath}");

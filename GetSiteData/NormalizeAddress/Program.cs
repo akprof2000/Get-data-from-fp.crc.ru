@@ -21,6 +21,8 @@ public class Program
     private static string DbPath = Path.Combine("gar", "gar.sqlite");
     private static bool IncludeHouses;
     private static bool DeleteSourceAfterImport = true;
+    private static string OsmSource = "https://download.geofabrik.de/russia-latest.osm.pbf";
+    private static int OsmMaxAgeDays = 90;
     private static string InputJsonPath = "OutputJson";
     private static string OutputNormalizedPath = "OutputNormalized";
 
@@ -36,8 +38,81 @@ public class Program
             "set-version" when args.Length > 1 && long.TryParse(args[1], out var v) => RunSetVersion(v),
             "sql" when args.Length > 1 => RunSql(args[1]),
             "normalize" => RunNormalize(),
+            "import-osm" => RunImportOsm(args.Length > 1 ? args[1] : null),
             _ => Usage()
         };
+    }
+
+    /// <summary>
+    /// Импорт OSM-выгрузки (*.osm.pbf) в геотаблицы базы: источник — аргумент команды,
+    /// иначе ключ OsmSource (локальный файл или URL; полная Россия с Geofabrik — ~4 ГБ,
+    /// можно и региональный срез для проверки). По URL файл скачивается во временное
+    /// место рядом с базой и после укладки удаляется.
+    /// </summary>
+    private static int RunImportOsm(string? sourceArg)
+    {
+        var source = sourceArg ?? OsmSource;
+        Log.Phase("Импорт OSM-геоданных");
+        Log.Info($"Источник: {source}");
+        if (!File.Exists(DbPath))
+        {
+            Log.Error("Сначала соберите базу ГАР (import/update) — OSM-таблицы добавляются в неё.");
+            return 1;
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            string pbfPath;
+            bool downloaded = false;
+            if (source.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                pbfPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(DbPath))!, "osm_download.pbf");
+                DownloadFile(source, pbfPath);
+                downloaded = true;
+            }
+            else
+            {
+                pbfPath = source;
+                if (!File.Exists(pbfPath)) { Log.Error($"Файл не найден: {pbfPath}"); return 1; }
+            }
+
+            OsmImporter.Import(pbfPath, DbPath);
+
+            if ((downloaded || DeleteSourceAfterImport) && File.Exists(pbfPath))
+            {
+                File.Delete(pbfPath);
+                Log.Info($"Исходный PBF удалён: {pbfPath}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Импорт OSM не удался: {ex.Message}");
+            return 1;
+        }
+        GarImporter.SetMeta(DbPath, "osmImportedAt", DateTime.UtcNow.ToString("O"));
+        Log.Ok($"Готово за {sw.Elapsed:hh\\:mm\\:ss}; база: {new FileInfo(DbPath).Length / (double)(1L << 20):F0} МБ");
+        return 0;
+    }
+
+    private static void DownloadFile(string url, string target)
+    {
+        using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var resp = http.Send(new HttpRequestMessage(HttpMethod.Get, url), HttpCompletionOption.ResponseHeadersRead);
+        resp.EnsureSuccessStatusCode();
+        var total = resp.Content.Headers.ContentLength ?? -1;
+        Log.Info($"Скачивание {(total > 0 ? $"{total / (double)(1L << 20):F0} МБ" : "(размер неизвестен)")}…");
+        using var src = resp.Content.ReadAsStream();
+        using var dst = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
+        var buffer = new byte[1 << 20];
+        long done = 0, nextReport = 512L * 1024 * 1024;
+        int read;
+        while ((read = src.Read(buffer)) > 0)
+        {
+            dst.Write(buffer, 0, read);
+            done += read;
+            if (done >= nextReport) { Log.Info($"  {done / (double)(1L << 30):F1} ГБ"); nextReport += 512L * 1024 * 1024; }
+        }
     }
 
     /// <summary>
@@ -75,6 +150,20 @@ public class Program
         }
         var matcher = new AddressMatcher(DbPath);
 
+        // Координаты адресов заполняются ТОЛЬКО в режиме полной адресной книги
+        // (IncludeHouses + скачанные дома): в облегчённой базе адресная точность
+        // не подтверждена домами, и геокодирование не выполняется вовсе.
+        OsmGeocoder? geocoder = null;
+        if (IncludeHouses && GarImporter.DbHasHouses(DbPath))
+        {
+            geocoder = new OsmGeocoder(DbPath);
+            if (!geocoder.IsAvailable) geocoder = null;
+        }
+        else
+        {
+            Log.Info("Координаты адресов не заполняются: полная адресная книга (IncludeHouses) выключена.");
+        }
+
         var files = Directory.EnumerateFiles(InputJsonPath, "*.json", SearchOption.AllDirectories)
             .Where(f => !f.EndsWith("_processed.json"))
             .Select(f => (Src: f, Rel: Path.GetRelativePath(InputJsonPath, f)))
@@ -88,6 +177,15 @@ public class Program
             var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(x.Src))!;
             var raw = node["baseStationAddress"]?.GetValue<string>();
             var addr = string.IsNullOrWhiteSpace(raw) ? new StructuredAddress() : matcher.Match(raw);
+
+            // Геокоординаты адресного объекта из OSM; якорь для тёзок — координаты
+            // станции из документа.
+            if (geocoder != null)
+            {
+                var (aLat, aLon) = ParseDocCoordinates(node["coordinates"]?.GetValue<string>());
+                geocoder.Fill(addr, aLat, aLon);
+            }
+
             node["address"] = System.Text.Json.JsonSerializer.SerializeToNode(addr, AddrJsonOpts);
 
             var target = Path.Combine(OutputNormalizedPath, x.Rel);
@@ -113,6 +211,18 @@ public class Program
         return 0;
     }
 
+    private static (double? Lat, double? Lon) ParseDocCoordinates(string? coords)
+    {
+        if (string.IsNullOrWhiteSpace(coords)) return (null, null);
+        var parts = coords.Split(',');
+        if (parts.Length != 2) return (null, null);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, inv, out var lat)
+            && double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, inv, out var lon))
+            return (lat, lon);
+        return (null, null);
+    }
+
     private static readonly System.Text.Json.JsonSerializerOptions AddrJsonOpts = new()
     {
         WriteIndented = true,
@@ -120,10 +230,10 @@ public class Program
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
-    /// <summary>Диагностика: выполнить SELECT к базе ГАР и напечатать строки.</summary>
+    /// <summary>Диагностика: выполнить SQL к базе ГАР и напечатать строки (если есть).</summary>
     private static int RunSql(string query)
     {
-        using var db = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={DbPath};Mode=ReadOnly");
+        using var db = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={DbPath}");
         db.Open();
         using var cmd = db.CreateCommand();
         cmd.CommandText = query;
@@ -241,6 +351,7 @@ public class Program
         if (current >= latest.VersionId)
         {
             Log.Ok("База актуальна — обновление не требуется.");
+            RefreshOsmIfStale();
             return 0;
         }
 
@@ -283,7 +394,39 @@ public class Program
         }
 
         Log.Ok($"База обновлена до версии {latest.VersionId}.");
+        RefreshOsmIfStale();
         return 0;
+    }
+
+    /// <summary>
+    /// Автообновление OSM-геоданных: в режиме полной адресной книги, если геотаблицы
+    /// отсутствуют или старше OsmMaxAgeDays, переимпортирует их из OsmSource
+    /// (у Geofabrik выгрузки обновляются ежедневно, версионного API нет — поэтому
+    /// критерий давности, дата хранится в meta).
+    /// </summary>
+    private static void RefreshOsmIfStale()
+    {
+        if (!IncludeHouses || !GarImporter.DbHasHouses(DbPath)) return;
+        try
+        {
+            var importedAt = GarImporter.GetMeta(DbPath, "osmImportedAt");
+            if (importedAt != null
+                && DateTime.TryParse(importedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
+                && (DateTime.UtcNow - dt).TotalDays < OsmMaxAgeDays)
+            {
+                Log.Info($"OSM-геоданные свежие ({dt:dd.MM.yyyy}) — обновление не требуется.");
+                return;
+            }
+            Log.Info(importedAt == null
+                ? "OSM-геоданных нет — импортирую."
+                : $"OSM-геоданные старше {OsmMaxAgeDays} дней — обновляю.");
+            if (RunImportOsm(null) == 0)
+                GarImporter.SetMeta(DbPath, "osmImportedAt", DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Обновление OSM-геоданных не удалось: {ex.Message} — работаем с прежними.");
+        }
     }
 
     private static int RunImport()
@@ -350,6 +493,9 @@ public class Program
         IncludeHouses = bool.TryParse(config["IncludeHouses"], out var ih) && ih;
         if (bool.TryParse(config["DeleteSourceAfterImport"], out var ds))
             DeleteSourceAfterImport = ds;
+        OsmSource = config["OsmSource"] ?? OsmSource;
+        if (int.TryParse(config["OsmMaxAgeDays"], out var oma) && oma > 0)
+            OsmMaxAgeDays = oma;
         InputJsonPath = WorkDir.Resolve(workRoot, config["InputJsonPath"] ?? InputJsonPath);
         OutputNormalizedPath = WorkDir.Resolve(workRoot, config["OutputNormalizedPath"] ?? OutputNormalizedPath);
     }

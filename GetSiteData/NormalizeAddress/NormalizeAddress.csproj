@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Чтение OSM PBF-выгрузок (офлайн-геокодер населённых пунктов и улиц). -->
+    <PackageReference Include="OsmSharp" Version="7.0.0-pre022" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.10" />
   </ItemGroup>
