@@ -26,6 +26,20 @@ public partial class Program
     private static bool UseDadata;
     private static CleanClientAsync? _dadataApi;
 
+    // Перепрогон ошибок: файлы, чей результат лежит в OutputErrors, считаются
+    // необработанными и разбираются заново текущей версией парсера. Нужен после
+    // обновления паттернов: конвейер помечает файл обработанным даже при неполном
+    // результате, и без этого флага улучшения парсера не доходят до старых ошибок
+    // (прогон v1.3.4 оставил 5219 ошибок, из которых v1.6.0 восстанавливает
+    // координаты у 652 — но сама их никогда не перечитает).
+    private static bool ReprocessErrors;
+
+    // Файлы, снятые с учёта на перепрогон («подкаталог|имя.txt»). Для них не работает
+    // ни одна проверка «уже обработан» — в том числе по наличию JSON в OutputJson:
+    // прогон v1.3.4 записал неполные документы В ОБА каталога сразу, и без этого
+    // набора дубль в OutputJson блокировал перепрогон.
+    private static readonly HashSet<string> _reprocessKeys = new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly object _logLock = new();
 
     // Ключ: относительный путь подкаталога входных файлов (пустая строка = корень)
@@ -66,6 +80,12 @@ public partial class Program
 
         // Загружаем логи всех существующих подкаталогов заранее
         LoadAllProcessedLogs();
+
+        if (ReprocessErrors)
+        {
+            var unmarked = UnmarkErrorFiles();
+            Log.Info($"Перепрогон ошибок   : снято с учёта {unmarked} файлов из {OutputErrorsPath}");
+        }
 
         // Единый формат конвейера: берём только файлы с именем «Номер заключения
         // и дата» (Common.DocumentName) — служебные и посторонние не трогаем.
@@ -148,6 +168,7 @@ public partial class Program
             MaxParallelism = mp;
         if (int.TryParse(config["Processing:LinesToRead"], out var lr) && lr > 0)
             LinesToRead = lr;
+        ReprocessErrors = bool.TryParse(config["Processing:ReprocessErrors"], out var re) && re;
 
         UseDadata = bool.TryParse(config["Dadata:Enabled"], out var en) && en;
         if (UseDadata)
@@ -233,6 +254,14 @@ public partial class Program
         EnsureDir(targetPath);
 
         WriteJson(targetPath, document);
+
+        // Убираем устаревший результат противоположной стороны: при перепрогоне ошибок
+        // успешный разбор переезжает из OutputErrors в OutputJson, и без удаления файл
+        // числился бы в обоих каталогах сразу.
+        var stalePath = hasAll
+            ? Path.Combine(OutputErrorsPath, jsonRelPath)
+            : Path.Combine(OutputJsonPath, jsonRelPath);
+        if (File.Exists(stalePath)) File.Delete(stalePath);
 
         MarkProcessed(subDir, fileInfo.Name);
 
@@ -775,12 +804,19 @@ public partial class Program
         {
             if (_processedByDir.TryGetValue(subDir, out var set) && set.Contains(fileInfo.Name))
                 return true;
+            // Файл снят с учёта на перепрогон: игнорируем и диск-проверки ниже —
+            // его старые JSON (в OutputErrors, а из-за задвоения порой и в OutputJson)
+            // признаком обработки не считаются.
+            if (ReprocessErrors && _reprocessKeys.Contains($"{subDir}|{fileInfo.Name}"))
+                return false;
         }
-        // Проверяем наличие готового JSON-файла на диске
+        // Проверяем наличие готового JSON-файла на диске.
+        // При перепрогоне ошибок JSON в OutputErrors признаком обработки НЕ считается —
+        // именно такие файлы и нужно разобрать заново.
         var relativePath = GetRelativePath(fileInfo.FullName);
         var jsonRel = Path.ChangeExtension(relativePath, ".json");
         if (File.Exists(Path.Combine(OutputJsonPath, jsonRel))
-            || File.Exists(Path.Combine(OutputErrorsPath, jsonRel)))
+            || (!ReprocessErrors && File.Exists(Path.Combine(OutputErrorsPath, jsonRel))))
         {
             lock (_logLock)
             {
@@ -839,6 +875,33 @@ public partial class Program
             }
             catch { _processedByDir[subDir] = []; }
         }
+    }
+
+    /// <summary>
+    /// Снимает с учёта все файлы, чей результат лежит в OutputErrors: убирает их имена
+    /// из логов обработанных, чтобы главный цикл разобрал их заново. Сами JSON-ошибки
+    /// не трогаем — при успешном перепрогоне их удалит ProcessFileAsync.
+    /// </summary>
+    private static int UnmarkErrorFiles()
+    {
+        if (!Directory.Exists(OutputErrorsPath)) return 0;
+        int unmarked = 0;
+        foreach (var errJson in Directory.EnumerateFiles(OutputErrorsPath, "*.json", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileName(errJson);
+            if (name.Equals(ProcessedLogFileName, StringComparison.OrdinalIgnoreCase)) continue;
+            var rel = Path.GetRelativePath(OutputErrorsPath, errJson);
+            var subDir = Path.GetDirectoryName(rel) ?? string.Empty;
+            var txtName = Path.ChangeExtension(name, ".txt");
+            lock (_logLock)
+            {
+                if (_processedByDir.TryGetValue(subDir, out var set) && set.Remove(txtName))
+                    _dirtyDirs.Add(subDir);
+                _reprocessKeys.Add($"{subDir}|{txtName}");
+                unmarked++;
+            }
+        }
+        return unmarked;
     }
 
     /// <summary>Сохраняет лог для конкретного подкаталога. Вызывается под _logLock.</summary>
