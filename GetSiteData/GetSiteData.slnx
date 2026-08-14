@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="GetGarData/GetGarData.csproj" />
   <Project Path="GetSiteData/GetSiteData.csproj" />
   <Project Path="MLTextToData/MLTextToData.csproj" />
   <Project Path="ParseHTML/ParseHTML.csproj" />
