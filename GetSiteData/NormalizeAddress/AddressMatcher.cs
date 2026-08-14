@@ -1,0 +1,494 @@
+using GetSiteData.Common;
+using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
+
+namespace NormalizeAddress;
+
+/// <summary>
+/// Сопоставляет сырой адрес из документа с иерархией ГАР: регион → район/МО →
+/// город/населённый пункт → планировочная структура → улица. База целиком
+/// поднимается в память (1,6 млн объектов, ~250 МБ) — на прогоне в 141 тысячу
+/// адресов SQL-запросы на каждый сегмент были бы на порядки медленнее.
+/// Сопоставление регистронезависимое (свой ToLowerInvariant — SQLite кириллицу
+/// в NOCASE не умеет) и словопорядко-независимое («ул. 3-я линия» = «Линия 3-я ул.»).
+/// </summary>
+public sealed partial class AddressMatcher
+{
+    private sealed record Node(long Id, string Guid, string Name, string Type, int Level, int Region, long Parent);
+
+    private readonly Dictionary<long, Node> _nodes = [];
+    // Ключ поиска: (регион, уровень-группа, нормализованное имя) → кандидаты.
+    // Уровень-группы: 1 — регион, 2..3 — район/МО, 4..6 — город/НП, 7 — тер., 8 — улица.
+    private readonly Dictionary<(int Region, int Group, string Key), List<Node>> _index = [];
+    private readonly Dictionary<string, Node> _regionsByKey = [];
+    // Районы по имени БЕЗ привязки к региону: адреса без региона («Майкопский район,
+    // п. Удобный…») восстанавливают регион по уникальному имени района.
+    private readonly Dictionary<string, List<Node>> _districtsByKey = [];
+    private readonly Dictionary<int, Node> _regionByCode = [];
+    private readonly Dictionary<string, List<Node>> _citiesByKey = [];
+
+    public AddressMatcher(string dbPath)
+    {
+        using var db = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        db.Open();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT a.objectid, a.guid, a.name, a.typename, a.level, a.region,
+                   COALESCE(h.parentobjid, 0)
+            FROM addr_obj a LEFT JOIN hierarchy h ON h.objectid = a.objectid
+            """;
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            var n = new Node(r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
+                             r.GetInt32(4), r.GetInt32(5), r.GetInt64(6));
+            _nodes[n.Id] = n;
+            var key = NormalizeName(n.Name);
+            if (n.Level == 1)
+            {
+                _regionsByKey.TryAdd(key, n);
+                _regionByCode.TryAdd(n.Region, n);
+                // Регион ищется и по «опорному» слову: «Башкортостан» из «Республика
+                // Башкортостан», «Саха» и «Якутия» из «Саха /Якутия/».
+                foreach (var word in SignificantWords(n.Name))
+                    _regionsByKey.TryAdd(word, n);
+            }
+            else
+            {
+                var group = LevelGroup(n.Level);
+                var k = (n.Region, group, key);
+                if (!_index.TryGetValue(k, out var list)) _index[k] = list = [];
+                list.Add(n);
+                if (group == 2)
+                {
+                    if (!_districtsByKey.TryGetValue(key, out var dl)) _districtsByKey[key] = dl = [];
+                    dl.Add(n);
+                }
+                // Только города (уровень 5): сёл-тёзок по стране тысячи, а имя города
+                // почти всегда уникально — по нему восстанавливаем регион.
+                if (n.Level == 5)
+                {
+                    if (!_citiesByKey.TryGetValue(key, out var cl)) _citiesByKey[key] = cl = [];
+                    cl.Add(n);
+                }
+            }
+        }
+        Log.Info($"Матчер: {_nodes.Count:N0} объектов ГАР в памяти");
+    }
+
+    private static int LevelGroup(int level) => level switch
+    {
+        <= 3 => 2,      // район / муниципальный округ
+        <= 6 => 4,      // город / посёлок / населённый пункт
+        7 => 7,         // планировочная структура (СНТ, тер.)
+        _ => 8          // улица
+    };
+
+    // ── Нормализация имён ──────────────────────────────────────────────
+
+    [GeneratedRegex(@"[^а-яё0-9\s-]", RegexOptions.IgnoreCase)]
+    private static partial Regex JunkCharsRx();
+
+    /// <summary>«3-я Линия» и «линия 3-я» дают один ключ: слова сортируются.</summary>
+    private static string NormalizeName(string name)
+    {
+        var lc = name.ToLowerInvariant().Replace('ё', 'е');
+        lc = JunkCharsRx().Replace(lc, " ");
+        var words = lc.Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries);
+        Array.Sort(words, StringComparer.Ordinal);
+        return string.Join(' ', words);
+    }
+
+    // Родовые слова не «опорные»: по одинокому «республика» регион не угадать.
+    private static readonly HashSet<string> GenericRegionWords =
+        ["республика", "область", "край", "округ", "автономный", "автономная", "народная"];
+
+    private static IEnumerable<string> SignificantWords(string name) =>
+        NormalizeName(name).Split(' ').Where(w => w.Length > 3 && !GenericRegionWords.Contains(w));
+
+    // ── Разбор сырого адреса на сегменты ───────────────────────────────
+
+    private enum Kind { Region, District, City, Settlement, Territory, Street, Building, Unknown }
+
+    // Словарь типов: слово-маркер сегмента → какого уровня объект искать.
+    private static readonly Dictionary<string, Kind> TypeMarkers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["область"] = Kind.Region, ["обл"] = Kind.Region, ["край"] = Kind.Region,
+        ["республика"] = Kind.Region, ["респ"] = Kind.Region, ["ао"] = Kind.Region,
+        ["округ"] = Kind.Region,
+        ["район"] = Kind.District, ["р-н"] = Kind.District, ["рн"] = Kind.District,
+        ["муниципальный"] = Kind.District, ["мо"] = Kind.District, ["го"] = Kind.District,
+        ["г"] = Kind.City, ["город"] = Kind.City, ["гор"] = Kind.City,
+        ["с"] = Kind.Settlement, ["село"] = Kind.Settlement, ["п"] = Kind.Settlement,
+        ["пос"] = Kind.Settlement, ["посёлок"] = Kind.Settlement, ["поселок"] = Kind.Settlement,
+        ["пгт"] = Kind.Settlement, ["д"] = Kind.Settlement, ["дер"] = Kind.Settlement,
+        ["деревня"] = Kind.Settlement, ["ст"] = Kind.Settlement, ["станица"] = Kind.Settlement,
+        ["аул"] = Kind.Settlement, ["хутор"] = Kind.Settlement, ["х"] = Kind.Settlement,
+        ["рп"] = Kind.Settlement, ["сл"] = Kind.Settlement, ["нп"] = Kind.Settlement,
+        ["снт"] = Kind.Territory, ["тер"] = Kind.Territory, ["территория"] = Kind.Territory,
+        ["мкр"] = Kind.Territory, ["микрорайон"] = Kind.Territory, ["промзона"] = Kind.Territory,
+        ["квартал"] = Kind.Territory,
+        ["ул"] = Kind.Street, ["улица"] = Kind.Street, ["пер"] = Kind.Street,
+        ["переулок"] = Kind.Street, ["пр-т"] = Kind.Street, ["пр-кт"] = Kind.Street,
+        ["проспект"] = Kind.Street, ["пр"] = Kind.Street, ["ш"] = Kind.Street,
+        ["шоссе"] = Kind.Street, ["наб"] = Kind.Street, ["набережная"] = Kind.Street,
+        ["б-р"] = Kind.Street, ["бульвар"] = Kind.Street, ["проезd"] = Kind.Street,
+        ["проезд"] = Kind.Street, ["тракт"] = Kind.Street, ["аллея"] = Kind.Street,
+        ["линия"] = Kind.Street, ["пл"] = Kind.Street, ["площадь"] = Kind.Street,
+    };
+
+    // Аббревиатуры регионов, встречающиеся в документах. Неоднозначные («ЧР», «РК»)
+    // намеренно отсутствуют.
+    private static readonly Dictionary<string, int> RegionAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ур"] = 18, ["рд"] = 5, ["рб"] = 2, ["кбр"] = 7, ["кчр"] = 9, ["рт"] = 16,
+        ["рм"] = 13, ["рх"] = 19, ["рсо"] = 15, ["еао"] = 79, ["хмао"] = 86,
+        ["янао"] = 89, ["нао"] = 83, ["мо"] = 50, ["ло"] = 47,
+    };
+
+    // Служебные префиксы перед адресом: «Ориентир: …», «РФ, …», «Россия, …».
+    [GeneratedRegex(@"^\s*(?:ориентир|адрес|рф|россия|российская\s+федерация)\s*[:.,]?\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadJunkRx();
+
+    // «д. 97», «дом 12а», «зд. 5», «влд. 3», «уч. 15», «97к2», «12/4», «15-1»,
+    // «д.15 корпус 1-3», «д. 4/1 стр. 2, лит. Б» — номер с дробью/диапазоном/буквой
+    // плюс сколько угодно частей-приставок (корпус/строение/литера/помещение) следом.
+    [GeneratedRegex(@"^(?:д|дом|зд|здание|стр|строение|соор|влд|владение|уч|участок|корп|корпус|лит|литера)?\.?\s*№?\s*(\d+[а-яa-z]?(?:\s*[/к-]\s*\d+[а-яa-z]?)?(?:[\s,]+(?:корп|корпус|к|стр|строение|соор|сооружение|лит|литера|литер|пом|помещение|оф|офис|кв)\.?\s*№?\s*[0-9а-яa-z/-]{1,6})*)\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex BuildingRx();
+
+    // Продолжение дома отдельным сегментом: «корп. 2», «стр. 3», «лит. Б», «к2»,
+    // а также голая цифра/буква сразу после дома («д. 28, 2» — корпус без слова).
+    [GeneratedRegex(@"^(?:(корп|корпус|к|стр|строение|соор|сооружение|лит|литера|литер|пом|помещение|оф|офис|кв)\.?\s*№?\s*([0-9а-яa-z/-]{1,6})|([0-9]{1,3}[а-яa-z]?))\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex BuildingContinuationRx();
+
+    // Десятичная дробь расстояния, разорванная запятой: «0» + «09 км юго-западнее…».
+    [GeneratedRegex(@"^\d{1,3}$")]
+    private static partial Regex DecimalDistanceHeadRx();
+
+    [GeneratedRegex(@"^\d{1,3}\s*(?:км|м)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex DecimalDistanceTailRx();
+
+    // Хвост дома внутри последнего сегмента: «Казбекская, д. 3»
+    [GeneratedRegex(@",?\s*(?:д|дом|зд|стр|влд|уч)\.?\s*№?\s*\d+\S*\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex BuildingTailRx();
+
+    // ── Сопоставление ──────────────────────────────────────────────────
+
+    public StructuredAddress Match(string rawAddress)
+    {
+        var result = new StructuredAddress();
+        var extras = new List<string>();
+
+        Node? region = null, district = null, place = null, territory = null, street = null;
+
+        rawAddress = LeadJunkRx().Replace(rawAddress, "");
+
+        var segments = rawAddress.Split([',', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        for (int si = 0; si < segments.Length; si++)
+        {
+            var seg = segments[si].Trim();
+            if (seg.Length == 0) continue;
+
+            // «0,09 км юго-западнее д. 4» — запятая десятичной дроби расщепила
+            // расстояние на сегменты: склеиваем обратно и целиком в описание места.
+            if (si + 1 < segments.Length && DecimalDistanceHeadRx().IsMatch(seg)
+                && DecimalDistanceTailRx().IsMatch(segments[si + 1]))
+            {
+                extras.Add($"{seg},{segments[si + 1].Trim()}");
+                si++;
+                continue;
+            }
+
+            // Продолжение уже найденного дома: «корп. 2», «стр. 3», «лит. Б», голая цифра.
+            // Скобочный хвост («корп. а (на антенной мачте)») отделяем: часть до скобки —
+            // к дому, скобка — в описание места.
+            if (result.Building != null)
+            {
+                var head = seg; string? parenTail = null;
+                var paren = seg.IndexOf('(');
+                if (paren > 0) { head = seg[..paren].Trim().TrimEnd(','); parenTail = seg[paren..].Trim(); }
+                var cm = BuildingContinuationRx().Match(head);
+                if (cm.Success && parenTail != null) extras.Add(parenTail);
+                if (cm.Success) seg = head;
+                if (cm.Success)
+                {
+                    // Тип части не выдумываем: «корп./стр./лит.» — как в документе,
+                    // голая цифра так и остаётся цифрой через запятую.
+                    result.Building += cm.Groups[1].Success
+                        ? $", {cm.Groups[1].Value.ToLowerInvariant().TrimEnd('.')}. {cm.Groups[2].Value}"
+                        : $", {cm.Groups[3].Value}";
+                    continue;
+                }
+            }
+
+            // Дом/строение?
+            var bm = BuildingRx().Match(seg);
+            if (bm.Success && result.Building == null && (street != null || place != null))
+            {
+                result.Building = bm.Groups[1].Value;
+                continue;
+            }
+
+            var (kind, nameKey) = ClassifySegment(seg);
+
+            // Города федерального значения («г. Москва», «г. Санкт-Петербург»,
+            // «г. Севастополь») — регионы 1-го уровня, хотя маркер у них городской.
+            if (region == null && kind == Kind.City && _regionsByKey.TryGetValue(nameKey, out var fedCity))
+            {
+                region = fedCity;
+                continue;
+            }
+
+            // «УР, г. Ижевск» — регион аббревиатурой.
+            if (region == null && RegionAliases.TryGetValue(nameKey, out var code))
+            {
+                _regionByCode.TryGetValue(code, out region);
+                continue;
+            }
+
+            if (region == null && (kind is Kind.Region or Kind.Unknown))
+            {
+                if (_regionsByKey.TryGetValue(nameKey, out var rn)
+                    || SignificantWordLookup(nameKey, out rn))
+                {
+                    region = rn;
+                    // «Чувашская Республика- Чувашия г. Чебоксары» — сегмент склеен без
+                    // запятой: остаток слов после имени региона пробуем как город/НП.
+                    var regionWords = SignificantWords(rn.Name)
+                        .Concat(NormalizeName(rn.Name).Split(' ')).ToHashSet();
+                    var rest = nameKey.Split(' ')
+                        .Where(w => !regionWords.Contains(w) && !TypeMarkers.ContainsKey(w))
+                        .ToArray();
+                    if (rest.Length > 0)
+                    {
+                        Array.Sort(rest, StringComparer.Ordinal);
+                        place ??= Find(region.Region, 4, string.Join(' ', rest));
+                    }
+                    continue;
+                }
+                if (kind == Kind.Region) { extras.Add(seg); continue; }
+            }
+
+            // Регион не указан, но имя ГОРОДА уникально по стране («Ориентир: г. Бородино»).
+            if (region == null && kind == Kind.City
+                && _citiesByKey.TryGetValue(nameKey, out var ccands) && ccands.Count == 1)
+            {
+                place = ccands[0];
+                _regionByCode.TryGetValue(place.Region, out region);
+                continue;
+            }
+
+            // Регион не указан, но имя района уникально по стране («Майкопский район» —
+            // только в Адыгее): восстанавливаем регион по району.
+            if (region == null && kind == Kind.District
+                && _districtsByKey.TryGetValue(nameKey, out var dcands)
+                && dcands.Select(d => d.Region).Distinct().Count() == 1)
+            {
+                district = dcands[0];
+                _regionByCode.TryGetValue(district.Region, out region);
+                continue;
+            }
+
+            if (region != null)
+            {
+                var node = kind switch
+                {
+                    Kind.District => Find(region.Region, 2, nameKey),
+                    Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey),
+                    Kind.Territory => Find(region.Region, 7, nameKey),
+                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district),
+                    _ => Find(region.Region, 4, nameKey)          // сегмент без маркера — чаще всего НП
+                         ?? Find(region.Region, 2, nameKey)
+                         ?? FindStreet(region.Region, nameKey, place ?? territory ?? district)
+                };
+                if (node != null)
+                {
+                    switch (LevelGroup(node.Level))
+                    {
+                        case 2: district ??= node; break;
+                        case 4: place ??= node; break;
+                        case 7: territory ??= node; break;
+                        default: street ??= node; break;
+                    }
+                    continue;
+                }
+            }
+
+            // Ничего не нашли — это описательная часть места (опора, столб, расстояние).
+            extras.Add(seg);
+        }
+
+        // Улица без дома: дом мог остаться хвостом в сегменте улицы.
+        Fill(result, region, district, place, territory, street);
+        if (extras.Count > 0) result.Extra = string.Join(", ", extras);
+        return result;
+    }
+
+    private bool SignificantWordLookup(string key, out Node? region)
+    {
+        region = null;
+        foreach (var w in key.Split(' '))
+            if (w.Length > 3 && _regionsByKey.TryGetValue(w, out region)) return true;
+        return false;
+    }
+
+    private (Kind, string) ClassifySegment(string seg)
+    {
+        var lc = seg.ToLowerInvariant().Replace('ё', 'е');
+        var words = JunkCharsRx().Replace(lc, " ")
+            .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
+        // Хвост дома внутри сегмента улицы срезаем до классификации.
+        var kind = Kind.Unknown;
+        var nameWords = new List<string>();
+        foreach (var w in words)
+        {
+            // «республика-» (хвостовой дефис от «Республика- Чувашия») — тоже маркер.
+            // Маркеры поглощаем ВСЕ, а не только первый: «г.о. город Казань» содержит
+            // и «го», и «город» — оба служебные, имя только «Казань». Тип сегмента
+            // определяет первый маркер.
+            var wClean = w.Trim('-');
+            if (wClean.Length > 0 && TypeMarkers.TryGetValue(wClean, out var k))
+            {
+                if (kind == Kind.Unknown) kind = k;
+                continue;
+            }
+            // Одинокие буквы-обломки («о» от «г.о.») именем не являются.
+            if (wClean.Length <= 1 && !char.IsDigit(wClean.FirstOrDefault())) continue;
+            nameWords.Add(w);
+        }
+        // Ключ имени строим Тем же NormalizeName, что и индекс: иначе «Кабардино-Балкарская»
+        // (дефис) в сегменте и в индексе давали бы разные ключи.
+        return (kind, NormalizeName(string.Join(' ', nameWords)));
+    }
+
+    /// <summary>Допуск опечаток «80 % сходства»: расстояние Левенштейна до 1/5 длины имени.</summary>
+    private static int FuzzyLimit(string key) => Math.Max(1, key.Length / 5);
+
+    private Node? Find(int region, int group, string key)
+    {
+        if (key.Length == 0) return null;
+        if (_index.TryGetValue((region, group, key), out var exact))
+            return exact[0];
+        // Нечёткое совпадение на кандидатах региона того же уровня — лечит OCR-опечатки
+        // («Кировоская», латинская «c», пропущенные буквы).
+        var max = FuzzyLimit(key);
+        Node? best = null;
+        int bestDist = max + 1;
+        foreach (var ((r, g, k), nodes) in _index)
+        {
+            if (r != region || g != group) continue;
+            if (Math.Abs(k.Length - key.Length) > max) continue;
+            var d = Levenshtein(k, key, max);
+            if (d < bestDist) { bestDist = d; best = nodes[0]; }
+            else if (d == bestDist && best != null && nodes[0].Id != best.Id) best = null;   // ничья — не угадываем
+        }
+        return bestDist <= max ? best : null;
+    }
+
+    private Node? FindStreet(int region, string key, Node? parentHint)
+    {
+        if (key.Length == 0) return null;
+        if (_index.TryGetValue((region, 8, key), out var cands))
+        {
+            if (parentHint == null) return cands.Count == 1 ? cands[0] : null;
+            // Улиц с одним именем в регионе много — выбираем ту, что лежит под найденным
+            // городом/районом (подъём по иерархии до 8 уровней).
+            foreach (var c in cands)
+                if (IsDescendantOf(c, parentHint.Id)) return c;
+            return null;
+        }
+
+        // Нечёткий поиск улицы — только в границах найденного города/района:
+        // на всём регионе похожих имён слишком много.
+        if (parentHint == null) return null;
+        var max = FuzzyLimit(key);
+        Node? best = null;
+        int bestDist = max + 1;
+        foreach (var ((r, g, k), nodes) in _index)
+        {
+            if (r != region || g != 8) continue;
+            if (Math.Abs(k.Length - key.Length) > max) continue;
+            var d = Levenshtein(k, key, max);
+            if (d > max || d > bestDist) continue;
+            foreach (var c in nodes)
+            {
+                if (!IsDescendantOf(c, parentHint.Id)) continue;
+                if (d < bestDist) { bestDist = d; best = c; }
+                else if (best != null && c.Id != best.Id) best = null;
+            }
+        }
+        return best;
+    }
+
+    private bool IsDescendantOf(Node node, long ancestorId)
+    {
+        var cur = node;
+        for (int i = 0; i < 8 && cur != null; i++)
+        {
+            if (cur.Parent == ancestorId) return true;
+            _nodes.TryGetValue(cur.Parent, out cur);
+        }
+        return false;
+    }
+
+    private static void Fill(StructuredAddress a, Node? region, Node? district, Node? place, Node? territory, Node? street)
+    {
+        Node? deepest = null;
+        if (region != null) { a.Region = Full(region); a.RegionCode = region.Region; a.MatchLevel = "region"; deepest = region; }
+        if (district != null) { a.District = Full(district); a.MatchLevel = "district"; deepest = district; }
+        if (place != null)
+        {
+            if (place.Level == 5 || place.Type is "г." or "г") { a.City = place.Name; a.MatchLevel = "city"; }
+            else { a.Settlement = Full(place); a.MatchLevel = "settlement"; }
+            deepest = place;
+        }
+        if (territory != null) { a.Territory = Full(territory); a.MatchLevel = "territory"; deepest = territory; }
+        if (street != null) { a.Street = Full(street); a.MatchLevel = "street"; deepest = street; }
+        if (deepest != null) a.Guid = deepest.Guid;
+    }
+
+    // «Красноярский край», «Мотыгинский р-н», но «респ. Дагестан», «с. Чепца»:
+    // имена-прилагательные ставим перед типом, существительные — после.
+    private static string Full(Node n)
+    {
+        // «Чувашская Республика -» (21) — хвостовой дефис прямо в имени ГАР.
+        var name = n.Name.Trim(' ', '-');
+        // Родовое слово уже в имени («Чувашская Республика») — тип не дублируем.
+        if (GenericRegionWords.Overlaps(NormalizeName(name).Split(' ')))
+            return name;
+        return AdjectiveNameRx().IsMatch(name) ? $"{name} {n.Type}".Trim() : $"{n.Type} {name}".Trim();
+    }
+
+    [GeneratedRegex(@"(?:ий|ый|ая|яя|ое|ье|ская|цкая)$")]
+    private static partial Regex AdjectiveNameRx();
+
+    /// <summary>
+    /// Дамерау-Левенштейн (OSA) с ранним выходом: пропуск, замена, вставка и
+    /// ПЕРЕСТАНОВКА соседних букв («Кирвоа» ← «Кирова») считаются одной правкой —
+    /// в документах буквы чаще всего именно путают местами или пропускают.
+    /// </summary>
+    private static int Levenshtein(string a, string b, int max)
+    {
+        if (a == b) return 0;
+        var prev2 = new int[b.Length + 1];
+        var prev = new int[b.Length + 1];
+        var cur = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
+        for (int i = 1; i <= a.Length; i++)
+        {
+            cur[0] = i;
+            int rowMin = cur[0];
+            for (int j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                cur[j] = Math.Min(Math.Min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1])
+                    cur[j] = Math.Min(cur[j], prev2[j - 2] + 1);
+                rowMin = Math.Min(rowMin, cur[j]);
+            }
+            if (rowMin > max) return max + 1;
+            (prev2, prev, cur) = (prev, cur, prev2);
+        }
+        return prev[b.Length];
+    }
+}

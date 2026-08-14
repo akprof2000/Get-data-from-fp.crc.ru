@@ -20,8 +20,9 @@ permissions:
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
-  # Все четыре приложения конвейера кладутся в ОДИН каталог поставки.
-  PROJECTS: 'GetSiteData ParseHTML MLTextToData ParseTextHeader'
+  # Все приложения конвейера кладутся в ОДИН каталог поставки
+  # (включая вспомогательные GetGarData и NormalizeAddress).
+  PROJECTS: 'GetSiteData ParseHTML MLTextToData ParseTextHeader GetGarData NormalizeAddress'
 
 jobs:
   build:

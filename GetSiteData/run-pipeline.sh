@@ -39,16 +39,22 @@ echo "============================================"
 echo "  Конвейер fp.crc.ru: сбор -> JSON"
 echo "============================================"
 
-run_step "1/4 Сбор страниц с сайта"            ./GetSiteData
-run_step "2/4 Разбор HTML в тексты документов" ./ParseHTML
-run_step "3/4 Классификация"                   ./MLTextToData process
-run_step "4/4 Извлечение данных в JSON"        ./ParseTextHeader
+run_step "1/5 Сбор страниц с сайта"            ./GetSiteData
+run_step "2/5 Разбор HTML в тексты документов" ./ParseHTML
+run_step "3/5 Классификация"                   ./MLTextToData process
+run_step "4/5 Извлечение данных в JSON"        ./ParseTextHeader
+
+# Нормализация адресов по офлайн-базе ГАР. Базы нет - приложение само пытается
+# её собрать (по URL или из локальной выгрузки GarSource); собрать неоткуда -
+# этап пропускается без ошибки, конвейер продолжается.
+run_step "5/5 Нормализация адресов по ГАР" ./NormalizeAddress normalize
 
 echo
 echo "============================================"
 echo "  Готово. Результат:"
-echo "    works/OutputJson/   - полные записи"
-echo "    works/OutputErrors/ - неполные записи"
+echo "    works/OutputJson/        - полные записи"
+echo "    works/OutputErrors/      - неполные записи"
+echo "    works/OutputNormalized/  - записи с нормализованным адресом (если есть база ГАР)"
 echo
 echo "  Выгрузить в ClickHouse (необязательно):"
 echo "    python3 json_to_clickhouse.py --input-dir works/OutputJson"

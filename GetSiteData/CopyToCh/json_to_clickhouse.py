@@ -139,6 +139,19 @@ CREATE TABLE IF NOT EXISTS {database}.{table} (
     lat Nullable(Float64),
     lon Nullable(Float64),
     operator Nullable(String),
+    addr_region Nullable(String),
+    addr_district Nullable(String),
+    addr_city Nullable(String),
+    addr_settlement Nullable(String),
+    addr_territory Nullable(String),
+    addr_street Nullable(String),
+    addr_building Nullable(String),
+    addr_extra Nullable(String),
+    addr_match_level Nullable(String),
+    addr_guid Nullable(String),
+    addr_region_code Nullable(Int32),
+    addr_lat Nullable(Float64),
+    addr_lon Nullable(Float64),
     processing_date DateTime,
     source_file_name String,
     relative_path String,
@@ -149,6 +162,40 @@ CREATE TABLE IF NOT EXISTS {database}.{table} (
 ORDER BY (document_number, document_date)
 SETTINGS index_granularity = 8192;
 """
+
+# Ожидаемая структура (колонка -> тип) для сверки с существующей таблицей.
+# Недостающие колонки добавляются через ALTER TABLE; колонка с ДРУГИМ типом —
+# признак несовместимой старой схемы, таблица пересоздаётся (данные перегружаются
+# заново — источником всегда остаются JSON на диске).
+EXPECTED_COLUMNS = {
+    "index": "Int64",
+    "document_number": "String",
+    "document_date": "Date",
+    "base_station_number": "Nullable(String)",
+    "base_station_address": "Nullable(String)",
+    "lat": "Nullable(Float64)",
+    "lon": "Nullable(Float64)",
+    "operator": "Nullable(String)",
+    "addr_region": "Nullable(String)",
+    "addr_district": "Nullable(String)",
+    "addr_city": "Nullable(String)",
+    "addr_settlement": "Nullable(String)",
+    "addr_territory": "Nullable(String)",
+    "addr_street": "Nullable(String)",
+    "addr_building": "Nullable(String)",
+    "addr_extra": "Nullable(String)",
+    "addr_match_level": "Nullable(String)",
+    "addr_guid": "Nullable(String)",
+    "addr_region_code": "Nullable(Int32)",
+    "addr_lat": "Nullable(Float64)",
+    "addr_lon": "Nullable(Float64)",
+    "processing_date": "DateTime",
+    "source_file_name": "String",
+    "relative_path": "String",
+    "raw_first_lines": "Array(String)",
+    "file_path": "String",
+    "loaded_at": "DateTime",
+}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -262,6 +309,10 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
     proc_date = parse_processing_date(data.get("processingDate"), logger)
     idx = safe_int(data.get("index"), logger)
 
+    # Объект «address» пишет этап NormalizeAddress (works/OutputNormalized);
+    # в необогащённых JSON его нет — все addr_*-поля остаются NULL.
+    addr = data.get("address") or {}
+
     record = {
         "index": idx,
         "document_number": doc_number,
@@ -271,6 +322,19 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
         "lat": lat,
         "lon": lon,
         "operator": data.get("operator"),
+        "addr_region": addr.get("region"),
+        "addr_district": addr.get("district"),
+        "addr_city": addr.get("city"),
+        "addr_settlement": addr.get("settlement"),
+        "addr_territory": addr.get("territory"),
+        "addr_street": addr.get("street"),
+        "addr_building": addr.get("building"),
+        "addr_extra": addr.get("extra"),
+        "addr_match_level": addr.get("matchLevel"),
+        "addr_guid": addr.get("guid"),
+        "addr_region_code": addr.get("regionCode"),
+        "addr_lat": addr.get("lat"),
+        "addr_lon": addr.get("lon"),
         "processing_date": proc_date,
         "source_file_name": str(data.get("sourceFileName", "")),
         "relative_path": str(data.get("relativePath", "")),
@@ -315,7 +379,11 @@ class ClickHouseWriter:
     INSERT_SQL = """
     INSERT INTO {database}.{table}
     (`index`, document_number, document_date, base_station_number, base_station_address,
-     lat, lon, operator, processing_date, source_file_name, relative_path,
+     lat, lon, operator,
+     addr_region, addr_district, addr_city, addr_settlement, addr_territory,
+     addr_street, addr_building, addr_extra, addr_match_level, addr_guid,
+     addr_region_code, addr_lat, addr_lon,
+     processing_date, source_file_name, relative_path,
      raw_first_lines, file_path)
     VALUES
     """
@@ -367,13 +435,64 @@ class ClickHouseWriter:
         return self._client
 
     def ensure_table(self) -> None:
+        """Создаёт таблицу либо сверяет структуру существующей с ожидаемой:
+        недостающие колонки добавляются через ALTER TABLE (данные сохраняются),
+        колонка с несовместимым типом — таблица пересоздаётся с нуля
+        (источник данных — JSON на диске, перезагрузка ничего не теряет)."""
+        client = self._get_client()
         sql = CREATE_TABLE_SQL.format(database=self.database, table=self.table)
         self.logger.info("Создание/проверка таблицы %s.%s", self.database, self.table)
         try:
-            self._get_client().execute(sql)
+            client.execute(sql)
+
+            existing = {
+                name: col_type
+                for name, col_type, *_ in client.execute(
+                    f"DESCRIBE TABLE {self.database}.{self.table}"
+                )
+            }
+
+            # Несовместимый тип у существующей колонки -> пересоздание.
+            mismatched = [
+                (name, existing[name], expected)
+                for name, expected in EXPECTED_COLUMNS.items()
+                if name in existing and existing[name] != expected
+            ]
+            if mismatched:
+                for name, got, want in mismatched:
+                    self.logger.warning(
+                        "Колонка %s: тип %s не совпадает с ожидаемым %s", name, got, want
+                    )
+                self.logger.warning(
+                    "Структура несовместима — таблица %s.%s пересоздаётся "
+                    "(перезагрузите данные полностью)", self.database, self.table
+                )
+                client.execute(f"DROP TABLE {self.database}.{self.table}")
+                client.execute(sql)
+                self.logger.info("Таблица пересоздана по актуальной схеме")
+                return
+
+            # Недостающие колонки -> добавляем, существующие данные сохраняются.
+            missing = [
+                (name, col_type)
+                for name, col_type in EXPECTED_COLUMNS.items()
+                if name not in existing
+            ]
+            for name, col_type in missing:
+                self.logger.info("Добавление колонки %s %s", name, col_type)
+                client.execute(
+                    f"ALTER TABLE {self.database}.{self.table} "
+                    f"ADD COLUMN `{name}` {col_type}"
+                )
+            if missing:
+                self.logger.info(
+                    "Схема дополнена: +%d колонок (старые строки получили NULL/умолчания)",
+                    len(missing),
+                )
+
             self.logger.info("Таблица готова")
         except Exception as exc:
-            self.logger.error("Ошибка создания таблицы: %s", exc)
+            self.logger.error("Ошибка создания/миграции таблицы: %s", exc)
             raise
 
     def insert_batch(self, rows: List[Dict[str, Any]]) -> int:
@@ -392,6 +511,19 @@ class ClickHouseWriter:
                 r["lat"],
                 r["lon"],
                 r["operator"],
+                r["addr_region"],
+                r["addr_district"],
+                r["addr_city"],
+                r["addr_settlement"],
+                r["addr_territory"],
+                r["addr_street"],
+                r["addr_building"],
+                r["addr_extra"],
+                r["addr_match_level"],
+                r["addr_guid"],
+                r["addr_region_code"],
+                r["addr_lat"],
+                r["addr_lon"],
                 r["processing_date"],
                 r["source_file_name"],
                 r["relative_path"],
@@ -646,8 +778,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Загрузка JSON-файлов в ClickHouse с полноценным логированием"
     )
-    # По умолчанию — выход ParseTextHeader под общим корнем рабочих данных конвейера.
-    parser.add_argument("--input-dir", default="works/OutputJson", help="Корневая директория с JSON")
+    # По умолчанию — обогащённые адресами документы этапа NormalizeAddress.
+    # Каталога нет (этап нормализации не запускался) — откатываемся на OutputJson:
+    # загрузчик понимает оба формата, addr_*-поля тогда остаются NULL.
+    default_input = "works/OutputNormalized"
+    if not Path(default_input).is_dir() and Path("works/OutputJson").is_dir():
+        default_input = "works/OutputJson"
+    parser.add_argument("--input-dir", default=default_input, help="Корневая директория с JSON")
     # Подключение: значения по умолчанию берутся из переменных окружения CH_*,
     # чтобы реальные адреса и пароли не попадали в код и историю git.
     parser.add_argument("--host", default=os.environ.get("CH_HOST", "localhost"), help="ClickHouse host")

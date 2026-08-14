@@ -29,34 +29,44 @@ echo   Конвейер fp.crc.ru: сбор -^> JSON
 echo ============================================
 
 echo.
-echo [1/4] Сбор страниц с сайта...
+echo [1/5] Сбор страниц с сайта...
 "%~dp0GetSiteData.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_collect
 
 echo.
-echo [2/4] Разбор HTML в тексты документов...
+echo [2/5] Разбор HTML в тексты документов...
 "%~dp0ParseHTML.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_parse
 
 echo.
-echo [3/4] Классификация: базовые станции / прочее...
+echo [3/5] Классификация: базовые станции / прочее...
 "%~dp0MLTextToData.exe" process
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_ml
 
 echo.
-echo [4/4] Извлечение данных в JSON...
+echo [4/5] Извлечение данных в JSON...
 "%~dp0ParseTextHeader.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_extract
 
+rem Нормализация адресов по офлайн-базе ГАР. Базы нет - приложение само пытается
+rem её собрать (по URL или из локальной выгрузки GarSource); собрать неоткуда -
+rem этап пропускается без ошибки, конвейер продолжается.
+echo.
+echo [5/5] Нормализация адресов по ГАР...
+"%~dp0NormalizeAddress.exe" normalize
+set RC=%errorlevel%
+if not "%RC%"=="0" goto :fail_normalize
+
 echo.
 echo ============================================
 echo   Готово. Результат:
-echo     works\OutputJson\   - полные записи
-echo     works\OutputErrors\ - неполные записи
+echo     works\OutputJson\        - полные записи
+echo     works\OutputErrors\      - неполные записи
+echo     works\OutputNormalized\  - записи с нормализованным адресом (если есть база ГАР)
 echo.
 echo   Выгрузить в ClickHouse (необязательно):
 echo     python json_to_clickhouse.py --input-dir works/OutputJson
@@ -66,16 +76,19 @@ chcp %OLDCP% >nul
 exit /b 0
 
 :fail_collect
-set STEP=1/4 Сбор страниц с сайта
+set STEP=1/5 Сбор страниц с сайта
 goto :fail
 :fail_parse
-set STEP=2/4 Разбор HTML
+set STEP=2/5 Разбор HTML
 goto :fail
 :fail_ml
-set STEP=3/4 Классификация
+set STEP=3/5 Классификация
 goto :fail
 :fail_extract
-set STEP=4/4 Извлечение данных
+set STEP=4/5 Извлечение данных
+goto :fail
+:fail_normalize
+set STEP=5/5 Нормализация адресов
 
 :fail
 echo.

@@ -2,6 +2,7 @@
   <Project Path="GetGarData/GetGarData.csproj" />
   <Project Path="GetSiteData/GetSiteData.csproj" />
   <Project Path="MLTextToData/MLTextToData.csproj" />
+  <Project Path="NormalizeAddress/NormalizeAddress.csproj" />
   <Project Path="ParseHTML/ParseHTML.csproj" />
   <Project Path="ParseTextHeader/ParseTextHeader.csproj" />
 </Solution>
