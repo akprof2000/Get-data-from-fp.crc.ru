@@ -28,6 +28,14 @@ public class BaseStationDocument
     /// <summary>Оператор/владелец станции (канонизированное имя, если оператор известен).</summary>
     public string? Operator { get; set; }
 
+    /// <summary>
+    /// Высоты подвеса антенн (уникальные пары «высота+база», в порядке появления
+    /// в документе). Поле необязательное: в JSON попадает при наличии в тексте,
+    /// в критерий полноты записи не входит.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<AntennaHeight>? AntennaHeights { get; set; }
+
     public DateTime ProcessingDate { get; set; }
 
     /// <summary>Первые строки исходного файла — для ручной проверки спорных случаев.</summary>
@@ -53,6 +61,20 @@ public class BaseStationDocument
         return missing;
     }
 }
+
+/// <summary>
+/// Высота подвеса антенны: значение в метрах, база отсчёта из документа
+/// («земля»/«кровля») и, если удалось определить, сама антенна (тип или название
+/// из той же строки документа). Неизвестные поля в JSON опускаются.
+/// </summary>
+public record AntennaHeight(
+    double Height,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Base,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Antenna = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? AntennaNumber = null);
 
 /// <summary>Итог обработки одного файла (для итоговой статистики прогона).</summary>
 public enum ProcessingResult

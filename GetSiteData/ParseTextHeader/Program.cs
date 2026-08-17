@@ -311,6 +311,9 @@ public partial class Program
         // Координаты из текста
         doc.Coordinates = CoordinateParser.Extract(fullText);
 
+        // Высоты подвеса антенн
+        doc.AntennaHeights = AntennaHeightParser.Extract(fullText);
+
         // Нормализация адреса через Dadata (только если UseDadata = true)
         if (!string.IsNullOrWhiteSpace(rawAddress))
         {
