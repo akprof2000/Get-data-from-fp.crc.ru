@@ -153,7 +153,10 @@ CREATE TABLE IF NOT EXISTS {database}.{table} (
     addr_guid Nullable(String),
     addr_region_code Nullable(Int32),
     addr_lat Nullable(Float64),
+    addr_geo_level Nullable(String),
     addr_lon Nullable(Float64),
+    coords_conflict_place Nullable(String),
+    coords_conflict_km Nullable(Float64),
     processing_date DateTime,
     source_file_name String,
     relative_path String,
@@ -192,7 +195,10 @@ EXPECTED_COLUMNS = {
     "addr_guid": "Nullable(String)",
     "addr_region_code": "Nullable(Int32)",
     "addr_lat": "Nullable(Float64)",
+    "addr_geo_level": "Nullable(String)",
     "addr_lon": "Nullable(Float64)",
+    "coords_conflict_place": "Nullable(String)",
+    "coords_conflict_km": "Nullable(Float64)",
     "processing_date": "DateTime",
     "source_file_name": "String",
     "relative_path": "String",
@@ -342,7 +348,10 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
         "addr_guid": addr.get("guid"),
         "addr_region_code": addr.get("regionCode"),
         "addr_lat": addr.get("lat"),
+        "addr_geo_level": addr.get("geoLevel"),
         "addr_lon": addr.get("lon"),
+        "coords_conflict_place": (data.get("addressByCoords") or {}).get("place"),
+        "coords_conflict_km": (data.get("addressByCoords") or {}).get("parsedAddressDistanceKm"),
         "processing_date": proc_date,
         "source_file_name": str(data.get("sourceFileName", "")),
         "relative_path": str(data.get("relativePath", "")),
@@ -390,7 +399,7 @@ class ClickHouseWriter:
      lat, lon, operator, antenna_heights, antenna_height_bases,
      addr_region, addr_district, addr_city, addr_settlement, addr_territory,
      addr_street, addr_building, addr_extra, addr_match_level, addr_guid,
-     addr_region_code, addr_lat, addr_lon,
+     addr_region_code, addr_lat, addr_geo_level, addr_lon, coords_conflict_place, coords_conflict_km,
      processing_date, source_file_name, relative_path,
      raw_first_lines, file_path)
     VALUES
@@ -533,7 +542,10 @@ class ClickHouseWriter:
                 r["addr_guid"],
                 r["addr_region_code"],
                 r["addr_lat"],
+                r["addr_geo_level"],
                 r["addr_lon"],
+                r["coords_conflict_place"],
+                r["coords_conflict_km"],
                 r["processing_date"],
                 r["source_file_name"],
                 r["relative_path"],
@@ -829,3 +841,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

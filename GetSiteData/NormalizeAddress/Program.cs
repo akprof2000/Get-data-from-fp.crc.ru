@@ -42,8 +42,49 @@ public class Program
             "sql" when args.Length > 1 => RunSql(args[1]),
             "normalize" => RunNormalize(),
             "import-osm" => RunImportOsm(args.Length > 1 ? args[1] : null),
+            "fix-osm-keys" => RunFixOsmKeys(),
             _ => Usage()
         };
+    }
+
+    /// <summary>
+    /// Миграция: пересчитывает ключи имён в OSM-таблицах текущим NameKey (идемпотентно).
+    /// Нужна после обновлений нормализации ключей, чтобы не перекачивать выгрузку.
+    /// </summary>
+    private static int RunFixOsmKeys()
+    {
+        using var db = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={DbPath}");
+        db.Open();
+        long total = 0;
+        foreach (var table in (string[])["osm_places", "osm_streets"])
+        {
+            var updates = new List<(string Old, string New)>();
+            using (var cmd = db.CreateCommand())
+            {
+                cmd.CommandText = $"SELECT DISTINCT name_key FROM {table}";
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
+                {
+                    var old = r.GetString(0);
+                    var fixedKey = OsmImporter.NameKey(old);
+                    if (fixedKey != old && fixedKey.Length > 0) updates.Add((old, fixedKey));
+                }
+            }
+            using var tx = db.BeginTransaction();
+            foreach (var (oldK, newK) in updates)
+            {
+                using var up = db.CreateCommand();
+                up.Transaction = tx;
+                up.CommandText = $"UPDATE {table} SET name_key=$n WHERE name_key=$o";
+                up.Parameters.AddWithValue("$n", newK);
+                up.Parameters.AddWithValue("$o", oldK);
+                total += up.ExecuteNonQuery();
+            }
+            tx.Commit();
+            Log.Info($"{table}: обновлено ключей {updates.Count}");
+        }
+        Log.Ok($"Строк переключено: {total:N0}");
+        return 0;
     }
 
     /// <summary>
@@ -195,7 +236,20 @@ public class Program
             if (geocoder != null)
             {
                 var (aLat, aLon) = ParseDocCoordinates(node["coordinates"]?.GetValue<string>());
-                geocoder.Fill(addr, aLat, aLon);
+                // Координаты адресного объекта — только когда адрес подтверждён до дома:
+                // центроиды НП у недоразобранных адресов вводят в заблуждение (точка
+                // станции и так лежит в поле coordinates).
+                if (addr.MatchLevel == "дом")
+                    geocoder.Fill(addr, aLat, aLon);
+
+                // Обратная сверка: по координатам станции определяем фактические НП и
+                // улицу; расходятся с разобранным адресом — добавляем addressByCoords
+                // (совпадают — объект не пишется).
+                if (aLat is { } la && aLon is { } lo)
+                {
+                    var byCoords = BuildAddressByCoords(matcher, geocoder, addr, la, lo);
+                    if (byCoords != null) node["addressByCoords"] = byCoords;
+                }
             }
 
             node["address"] = System.Text.Json.JsonSerializer.SerializeToNode(addr, AddrJsonOpts);
@@ -221,6 +275,67 @@ public class Program
         Log.Info($"  Только регион       : {regionOnly:N0}");
         Log.Info($"  Не сопоставлено     : {none:N0}");
         return 0;
+    }
+
+    // Пороги: адрес подтверждён, если одноимённый НП есть в этом радиусе от станции
+    // (у городов центроид бывает далеко от окраинных вышек — радиус больше);
+    // ближайший НП для объекта-подсказки ищем в разумном радиусе; улица — справочно.
+    // Города — щедрый радиус: городские округа (Уфа, Пермь) тянутся на десятки км,
+    // и вышка пригорода с адресом «г. Уфа» — не ошибка.
+    private const double CityConfirmKm = 25.0;
+    private const double SettlementConfirmKm = 8.0;
+    // Порог расхождения, когда адрес геокодирован до улицы.
+    private const double MismatchKm = 3.0;
+    private const double PlaceProximityKm = 7.0;
+    private const double StreetProximityKm = 0.4;
+
+    /// <summary>
+    /// «Адрес по координатам»: пишется ТОЛЬКО при реальном конфликте — населённый
+    /// пункт из разобранного адреса не подтверждается координатами станции (ни одной
+    /// одноимённой точки OSM в радиусе доверия) либо НП в адресе вовсе нет. Улицы в
+    /// детекции не участвуют: «станция на соседней улице» — шум застройки, не ошибка.
+    /// </summary>
+    private static System.Text.Json.Nodes.JsonObject? BuildAddressByCoords(
+        AddressMatcher matcher, OsmGeocoder geocoder, StructuredAddress addr, double lat, double lon)
+    {
+        var rev = geocoder.Reverse(lat, lon);
+        if (rev.PlaceKey == null || rev.PlaceKm > PlaceProximityKm) return null;
+
+        // Сверка «адрес ↔ координаты»: геокодируем разобранный адрес БЕЗ якоря станции
+        // (с якорем тёзка выбралась бы поближе и сверка всегда сходилась бы) и меряем
+        // расстояние до точки станции. Улица найдена — порог строгий (3 км); только
+        // центроид НП — порог по типу (города растянуты на десятки км).
+        var parsedPlaceKey = OsmImporter.NameKey(addr.City ?? addr.Settlement ?? "");
+        if (parsedPlaceKey.Length == 0) return null;
+
+        double? parsedKm = null;
+        double threshold;
+        if (geocoder.Locate(addr, null, null) is { } located && located.Level == "улица")
+        {
+            parsedKm = OsmGeocoder.HaversineKm(lat, lon, located.Lat, located.Lon);
+            threshold = MismatchKm;
+        }
+        else
+        {
+            // Улица не геокодировалась — сверяем по ближайшей одноимённой точке НП.
+            parsedKm = geocoder.MinDistanceToNamedPlace(parsedPlaceKey, lat, lon);
+            if (parsedKm == null) return null;   // НП нет в OSM — не судим
+            threshold = addr.City != null ? CityConfirmKm : SettlementConfirmKm;
+        }
+        if (parsedKm <= threshold) return null;
+        // Разобранный адрес дальше порога от станции — расхождение фиксируем.
+
+        var derivedStreetKey = rev.StreetKey != null && rev.StreetKm <= StreetProximityKm ? rev.StreetKey : null;
+        var (canonPlace, canonStreet) = matcher.CanonicalNames(addr.RegionCode ?? 0, rev.PlaceKey, derivedStreetKey);
+        var obj = new System.Text.Json.Nodes.JsonObject
+        {
+            ["place"] = canonPlace ?? rev.PlaceKey,
+            ["placeDistanceKm"] = Math.Round(rev.PlaceKm, 2)
+        };
+        if (derivedStreetKey != null) obj["street"] = canonStreet ?? derivedStreetKey;
+        if (parsedKm is { } pk) obj["parsedAddressDistanceKm"] = Math.Round(pk, 2);
+        obj["source"] = "osm";
+        return obj;
     }
 
     private static (double? Lat, double? Lon) ParseDocCoordinates(string? coords)

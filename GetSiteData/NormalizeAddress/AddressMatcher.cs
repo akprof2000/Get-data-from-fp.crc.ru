@@ -106,10 +106,26 @@ public sealed partial class AddressMatcher
     private static string NormalizeName(string name)
     {
         var lc = name.ToLowerInvariant().Replace('ё', 'е');
+        // Латинские буквы-омографы (OCR-мешанина «райoн», «c. Шипуново») приводим
+        // к кириллице — иначе ключи не совпадают с индексом (22-01-46).
+        lc = ReplaceLatinHomoglyphs(lc);
         lc = JunkCharsRx().Replace(lc, " ");
         var words = lc.Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries);
         Array.Sort(words, StringComparer.Ordinal);
         return string.Join(' ', words);
+    }
+
+    private static string ReplaceLatinHomoglyphs(string s)
+    {
+        Span<char> buf = stackalloc char[s.Length];
+        for (int i = 0; i < s.Length; i++)
+            buf[i] = s[i] switch
+            {
+                'a' => 'а', 'e' => 'е', 'o' => 'о', 'p' => 'р', 'c' => 'с',
+                'x' => 'х', 'y' => 'у', 'k' => 'к', 'm' => 'м', 'b' => 'в',
+                _ => s[i]
+            };
+        return new string(buf);
     }
 
     // Родовые слова не «опорные»: по одинокому «республика» регион не угадать.
@@ -178,7 +194,8 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@"^\d{1,3}$")]
     private static partial Regex DecimalDistanceHeadRx();
 
-    [GeneratedRegex(@"^\d{1,3}\s*(?:км|м)\b", RegexOptions.IgnoreCase)]
+    // Единица бывает пропущена вовсе: «0,02 западнее дома №254» (23-КК-10).
+    [GeneratedRegex(@"^\d{1,3}\s*(?:(?:км|м|километр\w*|метр\w*)\b|[а-я-]{0,8}(?:западнее|восточнее|севернее|южнее))", RegexOptions.IgnoreCase)]
     private static partial Regex DecimalDistanceTailRx();
 
     // Хвост дома внутри сегмента без запятой: «Казбекская, д. 3», «Улица Новочерёмушкинская Дом 63»
@@ -329,7 +346,8 @@ public sealed partial class AddressMatcher
             {
                 var node = kind switch
                 {
-                    Kind.District => Find(region.Region, 2, nameKey),
+                    // «городской округ Чебоксары» — маркер районный, а объект — город.
+                    Kind.District => Find(region.Region, 2, nameKey) ?? Find(region.Region, 4, nameKey),
                     Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey),
                     Kind.Territory => Find(region.Region, 7, nameKey),
                     Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker),
@@ -373,7 +391,21 @@ public sealed partial class AddressMatcher
 
     private (Kind, string, string?) ClassifySegment(string seg)
     {
-        var lc = seg.ToLowerInvariant().Replace('ё', 'е');
+        var lc = ReplaceLatinHomoglyphs(seg.ToLowerInvariant().Replace('ё', 'е'));
+        // Составные типы схлопываем в один маркер ДО разбиения на слова: иначе
+        // «городской округ Чебоксары» давал ключ «городской чебоксары» — «округ»
+        // съедался как маркер, а «городской» портил имя (21-01-04).
+        lc = lc.Replace("городской округ", "го")
+               .Replace("муниципальный округ", "го")
+               .Replace("муниципальный район", "рн")
+               .Replace("сельское поселение", "сп")
+               .Replace("городское поселение", "сп")
+               .Replace("сельский округ", "го")
+               .Replace("внутригородской район", "рн")
+               .Replace("рабочий поселок", "рп")
+               .Replace("поселок городского типа", "пгт")
+               .Replace("дачный поселок", "дп")
+               .Replace("курортный поселок", "кп");
         var words = JunkCharsRx().Replace(lc, " ")
             .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
         // Хвост дома внутри сегмента улицы срезаем до классификации.
@@ -579,6 +611,18 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@"^\s*\d+[а-яa-z]?")]
     private static partial Regex LeadNumberRx();
 
+    /// <summary>
+    /// Канонические имена НП и улицы по ключам обратного геокодирования (для объекта
+    /// «адрес по координатам»): ищем их в ГАР региона, не нашли — null.
+    /// </summary>
+    public (string? Place, string? Street) CanonicalNames(int region, string? placeKey, string? streetKey)
+    {
+        if (region <= 0) return (null, null);
+        var place = placeKey != null ? Find(region, 4, placeKey) : null;
+        var street = streetKey != null ? FindStreet(region, streetKey, place) : null;
+        return (place != null ? Full(place) : null, street != null ? Full(street) : null);
+    }
+
     // «Красноярский край», «Мотыгинский р-н», но «респ. Дагестан», «с. Чепца»:
     // имена-прилагательные ставим перед типом, существительные — после.
     private static string Full(Node n)
@@ -588,6 +632,11 @@ public sealed partial class AddressMatcher
         // Родовое слово уже в имени («Чувашская Республика») — тип не дублируем.
         if (GenericRegionWords.Overlaps(NormalizeName(name).Split(' ')))
             return name;
+        // НП, территории и улицы — всегда «тип имя» («с. Топольное», «ул. Комсомольская»):
+        // привычная форма записи. Правило прилагательных остаётся регионам и районам
+        // («Красноярский край», «Учалинский р-н»).
+        if (n.Level >= 4)
+            return $"{n.Type} {name}".Trim();
         return AdjectiveNameRx().IsMatch(name) ? $"{name} {n.Type}".Trim() : $"{n.Type} {name}".Trim();
     }
 

@@ -43,6 +43,14 @@ public class StructuredAddress
     /// </summary>
     public string MatchLevel { get; set; } = "нет";
 
+    /// <summary>
+    /// Чему соответствуют lat/lon: «улица» — середина найденной улицы, «нп» — точка
+    /// населённого пункта (улица не геокодировалась или не нашлась рядом). Координат
+    /// нет — поле опускается.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? GeoLevel { get; set; }
+
     /// <summary>ФИАС-GUID самого глубокого сопоставленного объекта.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Guid { get; set; }

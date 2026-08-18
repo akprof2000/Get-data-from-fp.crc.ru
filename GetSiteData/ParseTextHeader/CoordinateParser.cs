@@ -726,6 +726,10 @@ public static partial class CoordinateParser
         // долготой («172°51'38,69" з.д.»), то есть отрицательным значением.
         if (lat is < 41 or > 82) return null;
         if ((lon is < 19 or > 190) && (lon is < -180 or > -168)) return null;
+        // Широта, в точности равная долготе, — почти всегда дубль одной координаты
+        // (документ повторил широту, либо паттерн склеил два вхождения одного числа:
+        // 02-БЦ-01, 19-01-01). Отказ здесь даёт шанс другим паттернам найти пару честно.
+        if (Math.Abs(lat - lon) < 1e-9) return null;
         return $"{lat.ToString(Inv)}, {lon.ToString(Inv)}";
     }
 
@@ -780,6 +784,8 @@ public static partial class CoordinateParser
         // Южная широта / западная долгота в корпусе не встречаются, но обозначения бывают.
         var latV = text.Contains("ю.ш", StringComparison.OrdinalIgnoreCase) ? -lat.Value : lat.Value;
         var lonV = text.Contains("з.д", StringComparison.OrdinalIgnoreCase) ? -lon.Value : lon.Value;
+        // Дубль одной координаты (широта == долгота) — не пара; см. FormatIfValid.
+        if (Math.Abs(latV - lonV) < 1e-9) return null;
         return $"{latV.ToString(Inv)}, {lonV.ToString(Inv)}";
     }
 
