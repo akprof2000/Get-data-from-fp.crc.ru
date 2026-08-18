@@ -27,10 +27,23 @@ public sealed partial class AddressMatcher
     private readonly Dictionary<int, Node> _regionByCode = [];
     private readonly Dictionary<string, List<Node>> _citiesByKey = [];
 
+    // Открытое readonly-соединение для точечных запросов домов: 34 млн домов в память
+    // не поднять, а по индексу иерархии выборка домов одной улицы мгновенна.
+    private readonly SqliteConnection? _housesDb;
+
     public AddressMatcher(string dbPath)
     {
         using var db = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
         db.Open();
+        using (var chk = db.CreateCommand())
+        {
+            chk.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='houses'";
+            if (Convert.ToInt64(chk.ExecuteScalar()) > 0)
+            {
+                _housesDb = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+                _housesDb.Open();
+            }
+        }
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT a.objectid, a.guid, a.name, a.typename, a.level, a.region,
@@ -431,21 +444,81 @@ public sealed partial class AddressMatcher
         return false;
     }
 
-    private static void Fill(StructuredAddress a, Node? region, Node? district, Node? place, Node? territory, Node? street)
+    private void Fill(StructuredAddress a, Node? region, Node? district, Node? place, Node? territory, Node? street)
     {
         Node? deepest = null;
-        if (region != null) { a.Region = Full(region); a.RegionCode = region.Region; a.MatchLevel = "region"; deepest = region; }
-        if (district != null) { a.District = Full(district); a.MatchLevel = "district"; deepest = district; }
+        if (region != null) { a.Region = Full(region); a.RegionCode = region.Region; a.MatchLevel = "регион"; deepest = region; }
+        if (district != null) { a.District = Full(district); a.MatchLevel = "район"; deepest = district; }
         if (place != null)
         {
-            if (place.Level == 5 || place.Type is "г." or "г") { a.City = place.Name; a.MatchLevel = "city"; }
-            else { a.Settlement = Full(place); a.MatchLevel = "settlement"; }
+            if (place.Level == 5 || place.Type is "г." or "г") { a.City = place.Name; a.MatchLevel = "город"; }
+            else { a.Settlement = Full(place); a.MatchLevel = "населённый пункт"; }
             deepest = place;
         }
-        if (territory != null) { a.Territory = Full(territory); a.MatchLevel = "territory"; deepest = territory; }
-        if (street != null) { a.Street = Full(street); a.MatchLevel = "street"; deepest = street; }
+        if (territory != null) { a.Territory = Full(territory); a.MatchLevel = "территория"; deepest = territory; }
+        if (street != null) { a.Street = Full(street); a.MatchLevel = "улица"; deepest = street; }
         if (deepest != null) a.Guid = deepest.Guid;
+
+        // Полная адресная книга: спускаемся до дома. Совпал — matchLevel «дом»
+        // и GUID уже конкретного здания из ГАР.
+        if (street != null && a.Building != null && TryMatchHouse(street.Id, a.Building) is { } house)
+        {
+            a.MatchLevel = "дом";
+            a.Guid = house;
+        }
     }
+
+    /// <summary>
+    /// Ищет дом на улице по номеру из документа. Сравнение по нормализованному ключу
+    /// (только буквы-цифры: «28, корп. 2» ↔ ГАР «28 2»); неоднозначность — честный отказ:
+    /// при нескольких кандидатах с тем же ведущим номером дом не угадываем.
+    /// </summary>
+    private string? TryMatchHouse(long streetId, string building)
+    {
+        if (_housesDb == null) return null;
+        var want = HouseKey(building);
+        if (want.Length == 0) return null;
+        var wantLead = LeadNumber(building);
+
+        using var cmd = _housesDb.CreateCommand();
+        cmd.CommandText = """
+            SELECT h.guid, h.housenum FROM hierarchy hi
+            JOIN houses h ON h.objectid = hi.objectid
+            WHERE hi.parentobjid = $p
+            """;
+        cmd.Parameters.AddWithValue("$p", streetId);
+        using var r = cmd.ExecuteReader();
+
+        string? exact = null;
+        var leadMatches = new List<string>();
+        while (r.Read())
+        {
+            var guid = r.GetString(0);
+            var num = r.GetString(1);
+            if (HouseKey(num) == want) { exact = guid; break; }
+            if (wantLead.Length > 0 && LeadNumber(num) == wantLead) leadMatches.Add(guid);
+        }
+        return exact ?? (leadMatches.Count == 1 ? leadMatches[0] : null);
+    }
+
+    /// <summary>Ключ номера дома: нижний регистр, только буквы и цифры («28, корп. 2» → «28корп2»→«282»…).</summary>
+    private static string HouseKey(string s)
+    {
+        var lc = s.ToLowerInvariant()
+            .Replace("корпус", "").Replace("корп", "").Replace("строение", "")
+            .Replace("стр", "").Replace("литера", "").Replace("лит", "").Replace("дом", "");
+        return new string(lc.Where(char.IsLetterOrDigit).ToArray());
+    }
+
+    /// <summary>Ведущий номер: «28а, стр. 2» → «28а».</summary>
+    private static string LeadNumber(string s)
+    {
+        var m = LeadNumberRx().Match(s.ToLowerInvariant());
+        return m.Success ? m.Value : "";
+    }
+
+    [GeneratedRegex(@"^\s*\d+[а-яa-z]?")]
+    private static partial Regex LeadNumberRx();
 
     // «Красноярский край», «Мотыгинский р-н», но «респ. Дагестан», «с. Чепца»:
     // имена-прилагательные ставим перед типом, существительные — после.

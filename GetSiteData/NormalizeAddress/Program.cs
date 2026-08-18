@@ -206,9 +206,9 @@ public class Program
 
             switch (addr.MatchLevel)
             {
-                case "street": Interlocked.Increment(ref matchedStreet); break;
-                case "none": Interlocked.Increment(ref none); break;
-                case "region": Interlocked.Increment(ref regionOnly); break;
+                case "дом": case "улица": Interlocked.Increment(ref matchedStreet); break;
+                case "нет": Interlocked.Increment(ref none); break;
+                case "регион": Interlocked.Increment(ref regionOnly); break;
                 default: Interlocked.Increment(ref matchedPlace); break;
             }
             var n = Interlocked.Increment(ref done);
@@ -216,7 +216,7 @@ public class Program
         });
 
         Log.Phase("Готово:");
-        Log.Info($"  До улицы            : {matchedStreet:N0}");
+        Log.Info($"  До улицы/дома       : {matchedStreet:N0}");
         Log.Info($"  До района/города/тер: {matchedPlace:N0}");
         Log.Info($"  Только регион       : {regionOnly:N0}");
         Log.Info($"  Не сопоставлено     : {none:N0}");

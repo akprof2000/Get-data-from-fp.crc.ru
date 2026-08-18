@@ -36,8 +36,12 @@ public class StructuredAddress
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Extra { get; set; }
 
-    /// <summary>До какого уровня ГАР дошло сопоставление: region|district|city|settlement|territory|street|none.</summary>
-    public string MatchLevel { get; set; } = "none";
+    /// <summary>
+    /// До какого уровня ГАР дошло сопоставление:
+    /// регион | район | город | населённый пункт | территория | улица | дом | нет.
+    /// «дом» возможен только с полной адресной книгой (IncludeHouses).
+    /// </summary>
+    public string MatchLevel { get; set; } = "нет";
 
     /// <summary>ФИАС-GUID самого глубокого сопоставленного объекта.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
