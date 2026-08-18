@@ -202,6 +202,10 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@",?\s+(?:д|дом|зд|влд|уч)\.?\s*№?\s*(\d+\S*)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex BuildingTailRx();
 
+    // «…р-н г. …», «…район с. …» — пропущенная запятая между районом и НП.
+    [GeneratedRegex(@"(\bр-н|\bрайон)\s+(?=(?:г|с|п|пгт|д|ст|х|рп)\.\s?[А-ЯЁ])")]
+    private static partial Regex MissingCommaRx();
+
     // Почтовый индекс отдельным сегментом («117418») — служебный, выбрасываем.
     [GeneratedRegex(@"^\d{6}$")]
     private static partial Regex PostalIndexRx();
@@ -216,6 +220,9 @@ public sealed partial class AddressMatcher
         Node? region = null, district = null, place = null, territory = null, street = null;
 
         rawAddress = LeadJunkRx().Replace(rawAddress, "");
+        // «Курганинский р-н г. Курганинск» — два топонима без запятой: вставляем её,
+        // иначе сегмент с двумя маркерами давал нечитаемый ключ (23-КК-10).
+        rawAddress = MissingCommaRx().Replace(rawAddress, "$1, ");
 
         var segments = rawAddress.Split([',', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         for (int si = 0; si < segments.Length; si++)
@@ -347,7 +354,11 @@ public sealed partial class AddressMatcher
                 var node = kind switch
                 {
                     // «городской округ Чебоксары» — маркер районный, а объект — город.
-                    Kind.District => Find(region.Region, 2, nameKey) ?? Find(region.Region, 4, nameKey),
+                    // Фолбэк к городу — ТОЛЬКО для маркеров «го/мо» и только точным
+                    // совпадением: обычный «Шенкурский м.р-н» с фуззи превращался
+                    // в город Шенкурск, «Предгорный» — в хутор Подгорный (26-01-05, 29-01-02).
+                    Kind.District => Find(region.Region, 2, nameKey)
+                        ?? (typeMarker is "го" or "мо" ? Find(region.Region, 4, nameKey, allowFuzzy: false) : null),
                     Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey),
                     Kind.Territory => Find(region.Region, 7, nameKey),
                     Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker),
@@ -405,7 +416,14 @@ public sealed partial class AddressMatcher
                .Replace("рабочий поселок", "рп")
                .Replace("поселок городского типа", "пгт")
                .Replace("дачный поселок", "дп")
-               .Replace("курортный поселок", "кп");
+               .Replace("курортный поселок", "кп")
+               // Точечные сокращения, которые деление на слова разорвало бы в мусор
+               // («м.о.» → «м о», «ст-ца» → «ст ца» с бесхозной «ца», 26-01-05).
+               .Replace("м.о.", " мо ")
+               .Replace("г.о.", " го ")
+               .Replace("м.р-н", " рн ")
+               .Replace("ст-ца", " станица ")
+               .Replace("ст-це", " станица ");
         var words = JunkCharsRx().Replace(lc, " ")
             .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
         // Хвост дома внутри сегмента улицы срезаем до классификации.
@@ -456,11 +474,12 @@ public sealed partial class AddressMatcher
     /// <summary>Допуск опечаток «80 % сходства»: расстояние Левенштейна до 1/5 длины имени.</summary>
     private static int FuzzyLimit(string key) => Math.Max(1, key.Length / 5);
 
-    private Node? Find(int region, int group, string key)
+    private Node? Find(int region, int group, string key, bool allowFuzzy = true)
     {
         if (key.Length == 0) return null;
         if (_index.TryGetValue((region, group, key), out var exact))
             return exact[0];
+        if (!allowFuzzy) return null;
         // Нечёткое совпадение на кандидатах региона того же уровня — лечит OCR-опечатки
         // («Кировоская», латинская «c», пропущенные буквы).
         var max = FuzzyLimit(key);
