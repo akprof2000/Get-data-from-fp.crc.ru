@@ -78,8 +78,10 @@ public sealed partial class AddressMatcher
                     dl.Add(n);
                 }
                 // Только города (уровень 5): сёл-тёзок по стране тысячи, а имя города
-                // почти всегда уникально — по нему восстанавливаем регион.
-                if (n.Level == 5)
+                // почти всегда уникально — по нему восстанавливаем регион. После
+                // муниципальной реформы часть городов лежит на уровне 2 (Нижний
+                // Новгород) — их тоже учитываем.
+                if (n.Level == 5 || (n.Level == 2 && TypeKey(n.Type) == "г"))
                 {
                     if (!_citiesByKey.TryGetValue(key, out var cl)) _citiesByKey[key] = cl = [];
                     cl.Add(n);
@@ -164,6 +166,7 @@ public sealed partial class AddressMatcher
         ["б-р"] = Kind.Street, ["бульвар"] = Kind.Street, ["проезd"] = Kind.Street,
         ["проезд"] = Kind.Street, ["тракт"] = Kind.Street, ["аллея"] = Kind.Street,
         ["линия"] = Kind.Street, ["пл"] = Kind.Street, ["площадь"] = Kind.Street,
+        ["прд"] = Kind.Street,
     };
 
     // Аббревиатуры регионов, встречающиеся в документах. Неоднозначные («ЧР», «РК»)
@@ -330,7 +333,9 @@ public sealed partial class AddressMatcher
             }
 
             // Регион не указан, но имя ГОРОДА уникально по стране («Ориентир: г. Бородино»).
-            if (region == null && kind == Kind.City
+            // Без маркера тоже пробуем («Великий Новгород, ул. Ломоносова» — 53-01-01):
+            // уникальность по стране защищает от случайных слов.
+            if (region == null && kind is Kind.City or Kind.Unknown
                 && _citiesByKey.TryGetValue(nameKey, out var ccands) && ccands.Count == 1)
             {
                 place = ccands[0];
@@ -358,7 +363,8 @@ public sealed partial class AddressMatcher
                     // совпадением: обычный «Шенкурский м.р-н» с фуззи превращался
                     // в город Шенкурск, «Предгорный» — в хутор Подгорный (26-01-05, 29-01-02).
                     Kind.District => Find(region.Region, 2, nameKey)
-                        ?? (typeMarker is "го" or "мо" ? Find(region.Region, 4, nameKey, allowFuzzy: false) : null),
+                        ?? (typeMarker is "го" or "мо" ? Find(region.Region, 4, nameKey, allowFuzzy: false) : null)
+                        ?? FindDistrictByStem(region.Region, nameKey),
                     // Города Подмосковья и ряда регионов после муниципальной реформы
                     // лежат на уровне 2 («Серпухов г. level 2») — ищем и там (50-99-02).
                     Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey, typeMarker: typeMarker)
@@ -431,7 +437,8 @@ public sealed partial class AddressMatcher
                .Replace("ст-це", " станица ")
                .Replace("р.п.", " рп ")
                .Replace("п.г.т.", " пгт ")
-               .Replace("ж/д ст", " ждст ");
+               .Replace("ж/д ст", " ждст ")
+               .Replace("пр-зд", " прд ");
         var words = JunkCharsRx().Replace(lc, " ")
             .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
         // Хвост дома внутри сегмента улицы срезаем до классификации.
@@ -573,7 +580,43 @@ public sealed partial class AddressMatcher
                 else if (best != null && c.Id != best.Id) best = null;
             }
         }
-        return best;
+        if (best != null) return best;
+
+        // «Фролова ул» в документе против «ул. Генерала Фролова» в ГАР — почётная
+        // приставка опущена. Уникальный под якорем суффикс-тёзка — совпадение (51-01-04).
+        if (key.Length >= 5)
+        {
+            Node? suffixHit = null;
+            var suffix = " " + key;
+            foreach (var ((r, g, k), nodes) in _index)
+            {
+                if (r != region || g != 8 || !k.EndsWith(suffix, StringComparison.Ordinal)) continue;
+                foreach (var c in nodes)
+                {
+                    if (!IsDescendantOf(c, parentHint.Id)) continue;
+                    if (suffixHit != null && c.Id != suffixHit.Id) return null;   // неоднозначно
+                    suffixHit = c;
+                }
+            }
+            return suffixHit;
+        }
+        return null;
+    }
+
+    // «Борский район» после реформы в ГАР — «м.о. город Бор»: имя-прилагательное
+    // сводим к основе и пробуем «бор» и «город бор» точным совпадением (52-НЦ-09).
+    private Node? FindDistrictByStem(int region, string key)
+    {
+        if (key.Contains(' ')) return null;
+        foreach (var suf in (string[])["ский", "цкий", "ской", "ская", "цкая", "ское"])
+        {
+            if (!key.EndsWith(suf, StringComparison.Ordinal) || key.Length - suf.Length < 3) continue;
+            var stem = key[..^suf.Length];
+            var n = Find(region, 2, stem, allowFuzzy: false)
+                 ?? Find(region, 2, NormalizeName("город " + stem), allowFuzzy: false);
+            if (n != null) return n;
+        }
+        return null;
     }
 
     private bool IsDescendantOf(Node node, long ancestorId)
