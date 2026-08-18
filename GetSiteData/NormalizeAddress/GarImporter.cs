@@ -334,7 +334,18 @@ public static partial class GarImporter
             CREATE INDEX ix_hier_parent ON hierarchy(parentobjid);
             """);
         Log.Info("Индексы построены.");
+        // Маркер готовности — строго ПОСЛЕДНИМ: пока идёт импорт, файл базы уже
+        // существует, и параллельный normalize не должен принять её за готовую.
+        Exec(db, "INSERT OR REPLACE INTO meta VALUES ('ready', '1')");
     }
+
+    /// <summary>
+    /// База существует И достроена: маркер готовности ставится в конце импорта.
+    /// Базы прежних версий маркера не имеют — для них признаком готовности служит
+    /// записанный номер версии (он тоже появляется только после полного импорта).
+    /// </summary>
+    public static bool IsDbReady(string dbPath) =>
+        GetMeta(dbPath, "ready") == "1" || GetDbVersion(dbPath) > 0;
 
     private static long ImportAddrObjects(SqliteConnection db, ZipArchiveEntry entry, int region, HashSet<long> known)
     {

@@ -18,7 +18,10 @@ namespace NormalizeAddress;
 public class Program
 {
     private static string GarSource = "";
-    private static string DbPath = Path.Combine("gar", "gar.sqlite");
+    // По умолчанию база живёт в data/ рядом с приложением — как модель классификатора:
+    // это долгоживущий справочник, а не рабочие данные прогона, и чистка works
+    // не должна его уносить (пересборка — 30+ ГБ трафика и часы).
+    private static string DbPath = Path.Combine(AppContext.BaseDirectory, "data", "gar.sqlite");
     private static bool IncludeHouses;
     private static bool DeleteSourceAfterImport = true;
     private static string OsmSource = "https://download.geofabrik.de/russia-latest.osm.pbf";
@@ -97,22 +100,11 @@ public class Program
 
     private static void DownloadFile(string url, string target)
     {
+        // Многопоточно с докачкой: одиночное соединение сервера бывает придушено
+        // на порядок (Geofabrik), сегментное скачивание это обходит.
         using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        using var resp = http.Send(new HttpRequestMessage(HttpMethod.Get, url), HttpCompletionOption.ResponseHeadersRead);
-        resp.EnsureSuccessStatusCode();
-        var total = resp.Content.Headers.ContentLength ?? -1;
-        Log.Info($"Скачивание {(total > 0 ? $"{total / (double)(1L << 20):F0} МБ" : "(размер неизвестен)")}…");
-        using var src = resp.Content.ReadAsStream();
-        using var dst = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
-        var buffer = new byte[1 << 20];
-        long done = 0, nextReport = 512L * 1024 * 1024;
-        int read;
-        while ((read = src.Read(buffer)) > 0)
-        {
-            dst.Write(buffer, 0, read);
-            done += read;
-            if (done >= nextReport) { Log.Info($"  {done / (double)(1L << 30):F1} ГБ"); nextReport += 512L * 1024 * 1024; }
-        }
+        if (!MultiPartDownloader.Download(http, url, target))
+            throw new IOException("скачивание не завершилось — повторите запуск (докачка продолжит)");
     }
 
     /// <summary>
@@ -130,6 +122,26 @@ public class Program
         // Базы нет — не падаем, а сначала собираем её сами (update выберет полную
         // выгрузку). Не получилось (нет интернета и файла выгрузки — закрытый контур
         // без занесённого архива) — этап честно пропускается, конвейер продолжается.
+        // Файл есть, но маркера готовности нет — параллельный import/update ещё пишет
+        // базу (или прошлый оборвался). Ждём готовности, а не работаем с половиной данных.
+        if (File.Exists(DbPath) && !GarImporter.IsDbReady(DbPath))
+        {
+            Log.Info("База ГАР ещё строится (нет маркера готовности) — жду завершения импорта…");
+            var waited = TimeSpan.Zero;
+            var step = TimeSpan.FromSeconds(30);
+            while (waited < TimeSpan.FromHours(4) && File.Exists(DbPath) && !GarImporter.IsDbReady(DbPath))
+            {
+                Thread.Sleep(step);
+                waited += step;
+                if (waited.TotalMinutes % 10 < 0.5) Log.Info($"  всё ещё жду ({waited.TotalMinutes:F0} мин)…");
+            }
+            if (File.Exists(DbPath) && !GarImporter.IsDbReady(DbPath))
+            {
+                Log.Warn("База так и не достроилась — нормализация пропущена, перезапустите этап позже.");
+                return 0;
+            }
+        }
+
         if (!File.Exists(DbPath))
         {
             Log.Info($"Базы ГАР нет ({DbPath}) — пробую собрать автоматически.");
@@ -368,7 +380,13 @@ public class Program
                 : $"Отставание {deltas.Count} версий — полная пересборка выгоднее дельт.");
             GarSource = latest.GarXMLFullURL ?? GarSource;
             var rc = RunImport();
-            if (rc == 0) GarImporter.SetDbVersion(DbPath, latest.VersionId);
+            if (rc == 0)
+            {
+                GarImporter.SetDbVersion(DbPath, latest.VersionId);
+                // OSM-геоданные нужны и после полной пересборки, не только в ветках
+                // «актуально»/«дельты» (при пересборке старые osm-таблицы стираются).
+                RefreshOsmIfStale();
+            }
             return rc;
         }
 
@@ -489,7 +507,10 @@ public class Program
         var config = fullConfig.GetSection("NormalizeAddress");
 
         GarSource = config["GarSource"] ?? GarSource;
-        DbPath = WorkDir.Resolve(workRoot, config["DbPath"] ?? DbPath);
+        // Явно заданный DbPath уважает WorkRoot (прежнее поведение);
+        // без настройки — data/ рядом с приложением.
+        if (config["DbPath"] is { Length: > 0 } dbp)
+            DbPath = WorkDir.Resolve(workRoot, dbp);
         IncludeHouses = bool.TryParse(config["IncludeHouses"], out var ih) && ih;
         if (bool.TryParse(config["DeleteSourceAfterImport"], out var ds))
             DeleteSourceAfterImport = ds;

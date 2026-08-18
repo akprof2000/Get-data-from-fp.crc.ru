@@ -34,7 +34,7 @@ public class Program
     private static int MaxAttempts = 5;
 
     // Один клиент на всё скачивание; таймаут отключён — большой файл читается потоком,
-    // от зависаний защищает таймаут на чтение каждого куска в CopyWithProgressAsync.
+    // от зависаний защищает потоковый таймаут в MultiPartDownloader.
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -104,14 +104,11 @@ public class Program
 
         Log.Phase($"Скачивание версии {latest.VersionId}");
         Log.Info(url);
-        try
+        // Многопоточно с докачкой (сегменты + сайдкар прогресса); сервер без
+        // Range-поддержки автоматически получает однопоточный фоллбэк.
+        if (!MultiPartDownloader.Download(Http, url, targetFile))
         {
-            await DownloadWithResumeAsync(url, targetFile);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Скачивание не удалось: {ex.Message}");
-            Log.Info("Частично скачанный «.part» сохранён — следующий запуск продолжит с места обрыва.");
+            Log.Error("Скачивание не завершилось — «.part» сохранён, следующий запуск продолжит с места обрыва.");
             return 1;
         }
 
@@ -206,100 +203,4 @@ public class Program
         File.Move(tmp, path, overwrite: true);
     }
 
-    // ── Download with resume ───────────────────────────────────────────
-
-    private static async Task DownloadWithResumeAsync(string url, string targetFile)
-    {
-        var partFile = targetFile + ".part";
-
-        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
-        {
-            try
-            {
-                long already = File.Exists(partFile) ? new FileInfo(partFile).Length : 0;
-
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                if (already > 0)
-                {
-                    request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(already, null);
-                    Log.Info($"Докачка с {FmtSize(already)} (попытка {attempt}/{MaxAttempts})");
-                }
-
-                using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-
-                // Сервер не принял Range (отдаёт 200 вместо 206) — начинаем файл заново.
-                if (already > 0 && response.StatusCode != System.Net.HttpStatusCode.PartialContent)
-                {
-                    Log.Warn("Сервер не поддержал докачку — качаем файл сначала.");
-                    already = 0;
-                    File.Delete(partFile);
-                }
-                response.EnsureSuccessStatusCode();
-
-                long total = already + (response.Content.Headers.ContentLength ?? -1);
-                Log.Info($"Размер файла     : {(response.Content.Headers.ContentLength.HasValue ? FmtSize(total) : "неизвестен")}");
-
-                await using (var src = await response.Content.ReadAsStreamAsync())
-                await using (var dst = new FileStream(partFile, already > 0 ? FileMode.Append : FileMode.Create,
-                                                      FileAccess.Write, FileShare.None, 1 << 20))
-                {
-                    await CopyWithProgressAsync(src, dst, already, total);
-                }
-
-                // Сверка размера: недокачанный файл не должен сойти за готовый.
-                if (response.Content.Headers.ContentLength.HasValue
-                    && new FileInfo(partFile).Length != total)
-                {
-                    throw new IOException(
-                        $"размер не сошёлся: {new FileInfo(partFile).Length} из {total} байт");
-                }
-
-                File.Move(partFile, targetFile, overwrite: true);
-                return;
-            }
-            catch (Exception ex) when (attempt < MaxAttempts)
-            {
-                var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt) * 5);
-                Log.Warn($"Попытка {attempt}/{MaxAttempts}: {ex.Message} — повтор через {delay.TotalSeconds:F0} с");
-                await Task.Delay(delay);
-            }
-        }
-    }
-
-    private static async Task CopyWithProgressAsync(Stream src, Stream dst, long already, long total)
-    {
-        var buffer = new byte[1 << 20];
-        long done = already;
-        long nextReport = done + ReportEveryBytes;
-        var started = DateTime.UtcNow;
-
-        while (true)
-        {
-            // Таймаут на каждый кусок: мёртвое соединение обрывается и уходит на повтор
-            // с докачкой, а не висит бесконечно (общий таймаут клиента отключён).
-            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-            int read = await src.ReadAsync(buffer, cts.Token);
-            if (read == 0) break;
-            await dst.WriteAsync(buffer.AsMemory(0, read), cts.Token);
-            done += read;
-
-            if (done >= nextReport)
-            {
-                nextReport = done + ReportEveryBytes;
-                var speed = (done - already) / Math.Max(1, (DateTime.UtcNow - started).TotalSeconds);
-                var pct = total > 0 ? $" ({done * 100 / total} %)" : "";
-                Log.Info($"  {FmtSize(done)}{pct}, {FmtSize((long)speed)}/с");
-            }
-        }
-    }
-
-    private const long ReportEveryBytes = 512L * 1024 * 1024;   // отчёт каждые 512 МБ
-
-    private static string FmtSize(long bytes) => bytes switch
-    {
-        >= 1L << 30 => $"{bytes / (double)(1L << 30):F1} ГБ",
-        >= 1L << 20 => $"{bytes / (double)(1L << 20):F0} МБ",
-        >= 1L << 10 => $"{bytes / (double)(1L << 10):F0} КБ",
-        _ => $"{bytes} Б"
-    };
 }
