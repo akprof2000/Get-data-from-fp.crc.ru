@@ -873,6 +873,10 @@ public static partial class AddressParser
     [GeneratedRegex(@"^(?:Базовая\s+станция|БС)\s+(?:\w+\s+связи\s+)?№?\s*[\w./-]+\s*(?:""[^""]{1,40}""\s*)?,\s*", RegexOptions.IgnoreCase)]
     private static partial Regex StationPrefixRx();
 
+    // Ведущий почтовый индекс перед адресом.
+    [GeneratedRegex(@"^\d{6}\s*,\s*")]
+    private static partial Regex PostalPrefixRx();
+
     public static string Clean(string address)
     {
         if (string.IsNullOrWhiteSpace(address)) return address;
@@ -883,6 +887,8 @@ public static partial class AddressParser
         // «Базовая станция № 68-902GDL18L21L26, Тамбовская обл., …» — номер станции,
         // прилипший к адресу из «Наименование ПРТО и место расположения (адрес):» (68-01-03).
         address = StationPrefixRx().Replace(address, "");
+        // Ведущий почтовый индекс: «117418, Город Москва, …» (77-01-09).
+        address = PostalPrefixRx().Replace(address, "");
 
         // Отсекаем мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
         // (имя станции/оператора/филиала, попавшее в захват вместе с адресом: «базовая станция

@@ -181,9 +181,13 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@"^\d{1,3}\s*(?:км|м)\b", RegexOptions.IgnoreCase)]
     private static partial Regex DecimalDistanceTailRx();
 
-    // Хвост дома внутри последнего сегмента: «Казбекская, д. 3»
-    [GeneratedRegex(@",?\s*(?:д|дом|зд|стр|влд|уч)\.?\s*№?\s*\d+\S*\s*$", RegexOptions.IgnoreCase)]
+    // Хвост дома внутри сегмента без запятой: «Казбекская, д. 3», «Улица Новочерёмушкинская Дом 63»
+    [GeneratedRegex(@",?\s+(?:д|дом|зд|влд|уч)\.?\s*№?\s*(\d+\S*)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex BuildingTailRx();
+
+    // Почтовый индекс отдельным сегментом («117418») — служебный, выбрасываем.
+    [GeneratedRegex(@"^\d{6}$")]
+    private static partial Regex PostalIndexRx();
 
     // ── Сопоставление ──────────────────────────────────────────────────
 
@@ -234,15 +238,34 @@ public sealed partial class AddressMatcher
                 }
             }
 
-            // Дом/строение?
-            var bm = BuildingRx().Match(seg);
+            // Дом/строение? Скобочный хвост отщепляем и здесь: «дом 88 (торговый центр)» —
+            // дом 88, скобка — примета места (77-01-09).
+            var bSeg = seg; string? bTail = null;
+            var bParen = seg.IndexOf('(');
+            if (bParen > 0) { bSeg = seg[..bParen].Trim().TrimEnd(','); bTail = seg[bParen..].Trim(); }
+            var bm = BuildingRx().Match(bSeg);
             if (bm.Success && result.Building == null && (street != null || place != null))
             {
                 result.Building = bm.Groups[1].Value;
+                if (bTail != null) extras.Add(bTail);
                 continue;
             }
 
-            var (kind, nameKey) = ClassifySegment(seg);
+            // Почтовый индекс («117418, Город Москва…») — не адресный сегмент.
+            if (PostalIndexRx().IsMatch(seg)) continue;
+
+            // Дом, приклеенный к сегменту улицы без запятой («Улица Новочерёмушкинская
+            // Дом 63»), — отщепляем до классификации; номер станет Building, когда
+            // улица/место в этом же сегменте найдётся.
+            string? tailBuilding = null;
+            var bt = BuildingTailRx().Match(seg);
+            if (bt.Success && result.Building == null && seg.Length - bt.Length > 3)
+            {
+                tailBuilding = bt.Groups[1].Value;
+                seg = seg[..bt.Index].TrimEnd(',', ' ');
+            }
+
+            var (kind, nameKey, typeMarker) = ClassifySegment(seg);
 
             // Города федерального значения («г. Москва», «г. Санкт-Петербург»,
             // «г. Севастополь») — регионы 1-го уровня, хотя маркер у них городской.
@@ -309,10 +332,10 @@ public sealed partial class AddressMatcher
                     Kind.District => Find(region.Region, 2, nameKey),
                     Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey),
                     Kind.Territory => Find(region.Region, 7, nameKey),
-                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district),
+                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker),
                     _ => Find(region.Region, 4, nameKey)          // сегмент без маркера — чаще всего НП
                          ?? Find(region.Region, 2, nameKey)
-                         ?? FindStreet(region.Region, nameKey, place ?? territory ?? district)
+                         ?? FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker)
                 };
                 if (node != null)
                 {
@@ -323,12 +346,15 @@ public sealed partial class AddressMatcher
                         case 7: territory ??= node; break;
                         default: street ??= node; break;
                     }
+                    // Отщеплённый хвост-дом относится к найденной улице/месту.
+                    if (tailBuilding != null) result.Building ??= tailBuilding;
                     continue;
                 }
             }
 
             // Ничего не нашли — это описательная часть места (опора, столб, расстояние).
-            extras.Add(seg);
+            // Отщеплённый дом возвращаем сегменту, чтобы примета места осталась целой.
+            extras.Add(tailBuilding != null ? $"{seg}, д. {tailBuilding}" : seg);
         }
 
         // Улица без дома: дом мог остаться хвостом в сегменте улицы.
@@ -345,24 +371,26 @@ public sealed partial class AddressMatcher
         return false;
     }
 
-    private (Kind, string) ClassifySegment(string seg)
+    private (Kind, string, string?) ClassifySegment(string seg)
     {
         var lc = seg.ToLowerInvariant().Replace('ё', 'е');
         var words = JunkCharsRx().Replace(lc, " ")
             .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
         // Хвост дома внутри сегмента улицы срезаем до классификации.
         var kind = Kind.Unknown;
+        string? marker = null;
         var nameWords = new List<string>();
         foreach (var w in words)
         {
             // «республика-» (хвостовой дефис от «Республика- Чувашия») — тоже маркер.
             // Маркеры поглощаем ВСЕ, а не только первый: «г.о. город Казань» содержит
             // и «го», и «город» — оба служебные, имя только «Казань». Тип сегмента
-            // определяет первый маркер.
+            // определяет первый маркер; само слово-маркер сохраняем — тип улицы различает
+            // тёзок («Кутузовский пр-кт/пр-д/пер.» в Москве, 77-01-09).
             var wClean = w.Trim('-');
             if (wClean.Length > 0 && TypeMarkers.TryGetValue(wClean, out var k))
             {
-                if (kind == Kind.Unknown) kind = k;
+                if (kind == Kind.Unknown) { kind = k; marker = wClean; }
                 continue;
             }
             // Одинокие буквы-обломки («о» от «г.о.») именем не являются.
@@ -371,8 +399,27 @@ public sealed partial class AddressMatcher
         }
         // Ключ имени строим Тем же NormalizeName, что и индекс: иначе «Кабардино-Балкарская»
         // (дефис) в сегменте и в индексе давали бы разные ключи.
-        return (kind, NormalizeName(string.Join(' ', nameWords)));
+        return (kind, NormalizeName(string.Join(' ', nameWords)), marker);
     }
+
+    // Слово-маркер типа улицы из документа → допустимые типы ГАР (ключи без точек/дефисов).
+    private static readonly Dictionary<string, string[]> StreetTypeSynonyms = new()
+    {
+        ["улица"] = ["ул"], ["ул"] = ["ул"],
+        ["проспект"] = ["пркт"], ["прт"] = ["пркт"], ["пркт"] = ["пркт"],
+        ["переулок"] = ["пер"], ["пер"] = ["пер"],
+        ["проезд"] = ["прд"], ["прд"] = ["прд"],
+        // Голое «пр.» пишут и про проспект, и про проезд — допускаем оба.
+        ["пр"] = ["пркт", "прд"],
+        ["шоссе"] = ["ш"], ["ш"] = ["ш"],
+        ["набережная"] = ["наб"], ["наб"] = ["наб"],
+        ["бульвар"] = ["бр"], ["бр"] = ["бр"],
+        ["площадь"] = ["пл"], ["пл"] = ["пл"],
+        ["тракт"] = ["тракт"], ["аллея"] = ["аллея"],
+        ["линия"] = ["лн", "линия"], ["тупик"] = ["туп"],
+    };
+
+    private static string TypeKey(string t) => new([.. t.ToLowerInvariant().Where(char.IsLetter)]);
 
     /// <summary>Допуск опечаток «80 % сходства»: расстояние Левенштейна до 1/5 длины имени.</summary>
     private static int FuzzyLimit(string key) => Math.Max(1, key.Length / 5);
@@ -398,17 +445,29 @@ public sealed partial class AddressMatcher
         return bestDist <= max ? best : null;
     }
 
-    private Node? FindStreet(int region, string key, Node? parentHint)
+    private Node? FindStreet(int region, string key, Node? parentHint, string? typeMarker = null)
     {
         if (key.Length == 0) return null;
         if (_index.TryGetValue((region, 8, key), out var cands))
         {
-            if (parentHint == null) return cands.Count == 1 ? cands[0] : null;
+            // Тип улицы из документа («проспект» ≠ «переулок» ≠ «проезд») сужает тёзок:
+            // «Кутузовский» в Москве — пр-кт, пр-д и пер., и без типа выбрать нельзя (77-01-09).
+            var byType = cands;
+            if (typeMarker != null && StreetTypeSynonyms.TryGetValue(typeMarker, out var allowed))
+            {
+                var filtered = cands.Where(c => allowed.Contains(TypeKey(c.Type))).ToList();
+                if (filtered.Count > 0) byType = filtered;
+            }
+
+            if (parentHint == null) return byType.Count == 1 ? byType[0] : null;
             // Улиц с одним именем в регионе много — выбираем ту, что лежит под найденным
             // городом/районом (подъём по иерархии до 8 уровней).
-            foreach (var c in cands)
+            foreach (var c in byType)
                 if (IsDescendantOf(c, parentHint.Id)) return c;
-            return null;
+            // Под якорем не нашлась, но по региону+типу кандидат единственный — берём его:
+            // в городах федерального значения «районы» документа в ГАР отсутствуют,
+            // и якорь-подсказка не срабатывает (78-01-05).
+            return byType.Count == 1 ? byType[0] : null;
         }
 
         // Нечёткий поиск улицы — только в границах найденного города/района:
