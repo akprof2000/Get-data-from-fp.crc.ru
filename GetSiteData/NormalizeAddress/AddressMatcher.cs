@@ -666,6 +666,10 @@ public sealed partial class AddressMatcher
         if (want.Length == 0) return null;
         var wantLead = LeadNumber(building);
 
+        // Одно соединение на все потоки Parallel.ForEach: команды и ридеры
+        // SqliteConnection не потокобезопасны — сериализуем запросы домов.
+        lock (_housesDb)
+        {
         using var cmd = _housesDb.CreateCommand();
         cmd.CommandText = """
             SELECT h.guid, h.housenum FROM hierarchy hi
@@ -685,6 +689,7 @@ public sealed partial class AddressMatcher
             if (wantLead.Length > 0 && LeadNumber(num) == wantLead) leadMatches.Add(guid);
         }
         return exact ?? (leadMatches.Count == 1 ? leadMatches[0] : null);
+        }
     }
 
     /// <summary>Ключ номера дома: нижний регистр, только буквы и цифры («28, корп. 2» → «28корп2»→«282»…).</summary>
