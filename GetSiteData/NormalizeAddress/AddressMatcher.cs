@@ -359,7 +359,10 @@ public sealed partial class AddressMatcher
                     // в город Шенкурск, «Предгорный» — в хутор Подгорный (26-01-05, 29-01-02).
                     Kind.District => Find(region.Region, 2, nameKey)
                         ?? (typeMarker is "го" or "мо" ? Find(region.Region, 4, nameKey, allowFuzzy: false) : null),
-                    Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey),
+                    // Города Подмосковья и ряда регионов после муниципальной реформы
+                    // лежат на уровне 2 («Серпухов г. level 2») — ищем и там (50-99-02).
+                    Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey, typeMarker: typeMarker)
+                        ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker),
                     Kind.Territory => Find(region.Region, 7, nameKey),
                     Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker),
                     _ => Find(region.Region, 4, nameKey)          // сегмент без маркера — чаще всего НП
@@ -370,6 +373,8 @@ public sealed partial class AddressMatcher
                 {
                     switch (LevelGroup(node.Level))
                     {
+                        // Город уровня 2 (реформа МО) — это место, а не район.
+                        case 2 when TypeKey(node.Type) == "г": place ??= node; break;
                         case 2: district ??= node; break;
                         case 4: place ??= node; break;
                         case 7: territory ??= node; break;
@@ -423,7 +428,10 @@ public sealed partial class AddressMatcher
                .Replace("г.о.", " го ")
                .Replace("м.р-н", " рн ")
                .Replace("ст-ца", " станица ")
-               .Replace("ст-це", " станица ");
+               .Replace("ст-це", " станица ")
+               .Replace("р.п.", " рп ")
+               .Replace("п.г.т.", " пгт ")
+               .Replace("ж/д ст", " ждст ");
         var words = JunkCharsRx().Replace(lc, " ")
             .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
         // Хвост дома внутри сегмента улицы срезаем до классификации.
@@ -474,11 +482,36 @@ public sealed partial class AddressMatcher
     /// <summary>Допуск опечаток «80 % сходства»: расстояние Левенштейна до 1/5 длины имени.</summary>
     private static int FuzzyLimit(string key) => Math.Max(1, key.Length / 5);
 
-    private Node? Find(int region, int group, string key, bool allowFuzzy = true)
+    // Тип НП из документа → допустимые типы ГАР: тёзки разных типов в одном регионе
+    // нередки («г. Солигалич» и «ж/д ст. Солигалич»), и без фильтра выигрывал
+    // первый попавшийся (44-КЦ-01, 45-01-01, 47-13-04).
+    private static readonly Dictionary<string, string[]> SettlementTypeSynonyms = new()
+    {
+        ["г"] = ["г"], ["город"] = ["г"],
+        ["с"] = ["с"], ["село"] = ["с"],
+        ["п"] = ["п"], ["пос"] = ["п"], ["поселок"] = ["п"],
+        ["рп"] = ["рп"], ["пгт"] = ["пгт"],
+        ["д"] = ["д"], ["дер"] = ["д"], ["деревня"] = ["д"],
+        ["х"] = ["х"], ["хутор"] = ["х"], ["аул"] = ["аул"],
+        ["станица"] = ["стца", "ст"], ["сл"] = ["сл"],
+    };
+
+    private Node? Find(int region, int group, string key, bool allowFuzzy = true, string? typeMarker = null)
     {
         if (key.Length == 0) return null;
         if (_index.TryGetValue((region, group, key), out var exact))
+        {
+            if (typeMarker != null && exact.Count > 1
+                && SettlementTypeSynonyms.TryGetValue(typeMarker, out var allowed))
+            {
+                var filtered = exact.Where(c => allowed.Contains(TypeKey(c.Type))).ToList();
+                if (filtered.Count > 0) return filtered[0];
+            }
+            // Единственный кандидат, но тип из документа ему противоречит — при наличии
+            // маркера это скорее НЕ тот объект… однако лучше согласованный НП с другим
+            // типом, чем ничего: канонизация типов по ГАР — осознанное правило.
             return exact[0];
+        }
         if (!allowFuzzy) return null;
         // Нечёткое совпадение на кандидатах региона того же уровня — лечит OCR-опечатки
         // («Кировоская», латинская «c», пропущенные буквы).
