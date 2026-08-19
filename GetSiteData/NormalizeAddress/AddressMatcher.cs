@@ -192,7 +192,7 @@ public sealed partial class AddressMatcher
     private static partial Regex PoStreetRx();
 
     // НП внутри приметы места: «в 6-ти км от г. Камень-на-Оби в южном направлении».
-    [GeneratedRegex(@"\bот\s+((?:г|пгт|с|п|д|рп)\.\s?[А-ЯЁ][А-Яа-яё-]*(?:\s[А-ЯЁ][А-Яа-яё-]*)*)", RegexOptions.None)]
+    [GeneratedRegex(@"\b(?:от|западнее|восточнее|севернее|южнее)\s+((?:г|пгт|с|п|д|рп)\.\s?[А-ЯЁ][А-Яа-яё-]*(?:\s[А-ЯЁ][А-Яа-яё-]*)*)", RegexOptions.None)]
     private static partial Regex FromPlaceRx();
 
     // Служебные префиксы перед адресом: «Ориентир: …», «РФ, …», «Россия, …».
@@ -250,6 +250,9 @@ public sealed partial class AddressMatcher
         // иначе сегмент с двумя маркерами давал нечитаемый ключ (23-КК-10).
         rawAddress = MissingCommaRx().Replace(rawAddress, "$1, ");
         rawAddress = BeforeDistanceRx().Replace(rawAddress, ", ");
+        // Скобка-примета склеена с НП: «д. Бердянка (91 м на юго-восток от ул. Западная, 17)»
+        // — отделяем запятой, иначе имя НП тонет в примете (55-01-04).
+        rawAddress = rawAddress.Replace(" (", ", (");
 
         var segments = rawAddress.Split([',', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         var pendingDistricts = new List<Node>();
@@ -414,6 +417,14 @@ public sealed partial class AddressMatcher
 
             if (region != null)
             {
+                // Чисто цифровой ключ («17» от хвоста «…, 17)») — не имя НП: фуззи
+                // превращал его в «х. № 12» (55-01-04).
+                if (kind != Kind.Street && nameKey.Length > 0
+                    && nameKey.All(ch => char.IsDigit(ch) || ch == ' '))
+                {
+                    extras.Add(tailBuilding != null ? $"{seg}, д. {tailBuilding}" : seg);
+                    continue;
+                }
                 var node = kind switch
                 {
                     // «городской округ Чебоксары» — маркер районный, а объект — город.
@@ -461,6 +472,11 @@ public sealed partial class AddressMatcher
                         case 4 when place != null && IsDescendantOf(node, place.Id):
                             // «г. Сочи, с. Эстосадок»: углубляем место, но ГОРОД сохраняем (23-КК-10).
                             if (place.Level == 5 || TypeKey(place.Type) == "г") result.City = place.Name;
+                            place = node; break;
+                        // Сельское поселение/сельсовет — не настоящий НП: реальное село
+                        // его вытесняет («с.п. Суворовский сельсовет, село Логачёвка», 56-01-09).
+                        case 4 when place != null && TypeKey(place.Type) == "сп"
+                                 && node.Level is 5 or 6:
                             place = node; break;
                         case 4: place ??= node; break;
                         case 7: territory ??= node; break;

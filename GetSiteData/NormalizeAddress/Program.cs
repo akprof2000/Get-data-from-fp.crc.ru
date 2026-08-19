@@ -242,6 +242,27 @@ public class Program
                 if (addr.MatchLevel == "дом")
                     geocoder.Fill(addr, aLat, aLon);
 
+                // Улица не нашлась в ГАР, но осталась в extra и ПОДТВЕРЖДАЕТСЯ обратным
+                // геокодом OSM у координат станции — доверяем документу (50-99-02:
+                // «ул. Королева» в extra, та же улица в OSM в сотне метров).
+                if (addr.Street == null && addr.Extra != null && aLat is { } sla && aLon is { } slo)
+                {
+                    var pm = System.Text.RegularExpressions.Regex.Match(addr.Extra,
+                        @"(?:ул\.?|улица)\s*([А-ЯЁ][^,()]{2,40})", System.Text.RegularExpressions.RegexOptions.None);
+                    if (pm.Success)
+                    {
+                        var streetName = pm.Groups[1].Value.Trim();
+                        var rev2 = geocoder.Reverse(sla, slo);
+                        if (rev2.StreetKey != null && rev2.StreetKm <= 1.0
+                            && rev2.StreetKey == OsmImporter.NameKey(streetName))
+                        {
+                            addr.Street = "ул. " + streetName;
+                            if (addr.MatchLevel is "территория" or "населённый пункт" or "город" or "район")
+                                addr.MatchLevel = "улица";
+                        }
+                    }
+                }
+
                 // Обратная сверка: по координатам станции определяем фактические НП и
                 // улицу; расходятся с разобранным адресом — добавляем addressByCoords
                 // (совпадают — объект не пишется).
@@ -323,6 +344,10 @@ public class Program
             threshold = addr.City != null ? CityConfirmKm : SettlementConfirmKm;
         }
         if (parsedKm <= threshold) return null;
+        // Экстремальные расстояния (>300 км) — шум сверочного геокода: одноимённой
+        // точки в OSM поблизости просто нет, и «ближайшая» тёзка нашлась в другом
+        // регионе. Это не признак неверного адреса — не пишем (57-01-04: 1849 км).
+        if (parsedKm > 300) return null;
         // Разобранный адрес дальше порога от станции — расхождение фиксируем.
 
         var derivedStreetKey = rev.StreetKey != null && rev.StreetKm <= StreetProximityKm ? rev.StreetKey : null;
