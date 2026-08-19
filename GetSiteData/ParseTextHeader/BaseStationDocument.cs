@@ -38,6 +38,14 @@ public class BaseStationDocument
 
     public DateTime ProcessingDate { get; set; }
 
+    /// <summary>
+    /// Незаполненные обязательные поля. С переходом на единую выходную папку
+    /// (без OutputErrors) полнота записи видна прямо в документе; при полном
+    /// наборе полей свойство null и в JSON не пишется.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? MissingFields { get; set; }
+
     /// <summary>Первые строки исходного файла — для ручной проверки спорных случаев.</summary>
     public List<string> RawFirstLines { get; set; } = [];
 

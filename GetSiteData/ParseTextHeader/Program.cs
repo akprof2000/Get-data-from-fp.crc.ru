@@ -76,7 +76,7 @@ public partial class Program
         Log.Info($"Нормализация Dadata : {(UseDadata ? "ВКЛЮЧЕНА" : "ОТКЛЮЧЕНА (отладочный режим)")}");
 
         Directory.CreateDirectory(OutputJsonPath);
-        Directory.CreateDirectory(OutputErrorsPath);
+        // Единая выходная папка: OutputErrors больше не создаётся (см. targetPath ниже).
 
         // Загружаем логи всех существующих подкаталогов заранее
         LoadAllProcessedLogs();
@@ -247,20 +247,19 @@ public partial class Program
         var hasAll = document.HasAllRequiredFields();
 
         var jsonRelPath = Path.ChangeExtension(relativePath, ".json");
-        var targetPath = hasAll
-            ? Path.Combine(OutputJsonPath, jsonRelPath)
-            : Path.Combine(OutputErrorsPath, jsonRelPath);
+        // ЕДИНАЯ выходная папка: документы с неполными полями больше не уводятся
+        // в OutputErrors — все результаты лежат в OutputJson и все проходят
+        // нормализацию; полнота видна по missingFields в самом документе.
+        var targetPath = Path.Combine(OutputJsonPath, jsonRelPath);
+        document.MissingFields = hasAll ? null : document.GetMissingFields();
 
         EnsureDir(targetPath);
 
         WriteJson(targetPath, document);
 
-        // Убираем устаревший результат противоположной стороны: при перепрогоне ошибок
-        // успешный разбор переезжает из OutputErrors в OutputJson, и без удаления файл
-        // числился бы в обоих каталогах сразу.
-        var stalePath = hasAll
-            ? Path.Combine(OutputErrorsPath, jsonRelPath)
-            : Path.Combine(OutputJsonPath, jsonRelPath);
+        // Наследие двухпапочной схемы: если файл когда-то попадал в OutputErrors —
+        // убираем дубликат.
+        var stalePath = Path.Combine(OutputErrorsPath, jsonRelPath);
         if (File.Exists(stalePath)) File.Delete(stalePath);
 
         MarkProcessed(subDir, fileInfo.Name);
@@ -397,6 +396,9 @@ public partial class Program
         // приклеен к кириллице («BTS-15-00146UL18L21L26сети», 15-01-09). Заглавная
         // кириллица в суффиксе — часть номера («…L26L26Т», 66-01-32).
         (@"\b(BTS-[A-Z0-9\-]*[A-Z0-9])(?=[а-яё])", 1),
+        // «BTS-23- 00489GUL18» — пробел после внутреннего дефиса (23-КК-10):
+        // склеиваем префикс и хвост в один номер без пробела.
+        (@"\b(BTS-\d{1,3}-)\s(\d{3,}[A-ZА-ЯЁa-zа-яё0-9]*)\b", -2),
         (@"\b(BTS-[A-ZА-ЯЁ0-9\-]*[A-ZА-ЯЁ0-9])\b", 1),
         // «Площадка PL_16_01993» / «PL 05 107» — код площадки МТС (16-11-10, 05-01-02)
         (@"\b(PL[_ ]\d{2}[_ ]\d{3,6})\b", 1),
@@ -758,7 +760,14 @@ public partial class Program
         {
             var m = rx.Match(text);
             if (!m.Success) continue;
-            var value = (group == 0 ? m.Value : m.Groups[group].Value).Trim();
+            // group=-2 — склейка двух групп (номер, разорванный пробелом в источнике).
+            var value = group switch
+            {
+                0 => m.Value,
+                -2 => m.Groups[1].Value + m.Groups[2].Value,
+                _ => m.Groups[group].Value
+            };
+            value = value.Trim();
             // Убираем внутренние пробелы в номере (напр. «64- 01361» → «64-01361»)
             value = InnerSpaceDashRx().Replace(value, "$1-$2");
             value = DashSpaceDigitRx().Replace(value, "-$1");

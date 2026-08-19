@@ -38,6 +38,7 @@ internal partial class Program
     private static int _resultsPerPage = 50;    // параметр rpp сайта
     private static int _parallelism = 4;        // одновременных запросов (бережём чужой сайт)
     private static int _maxAttempts = 5;        // максимум повторов одного запроса
+    private static int _termParallelism = 2;    // одновременных пар «термин × месяц»
     private static int _requestTimeoutSeconds = 60;
 
     private const string UserAgent =
@@ -79,24 +80,33 @@ internal partial class Program
         Log.Info($"Период  : {_periodStart:MM.yyyy} — {_periodEnd:MM.yyyy}");
         Log.Info($"Выходная директория: {_outputPath}");
 
+        // Пары «термин × месяц» обрабатываем по две одновременно: первый запрос
+        // каждой пары «холодный» (сервер строит поиск 30–50 с), последующие страницы
+        // отдаются из кэша за доли секунды — перекрытие двух пар прячет холодную
+        // задержку. Больше двух не берём: от 6–8 одновременных тяжёлых запросов
+        // сервер начинает деградировать.
+        var jobs = new List<(string Term, DateOnly Month)>();
         foreach (string searchTerm in _searchTerms)
         {
-            Log.Phase($"Обработка термина: {searchTerm}");
-
-            // Помесячный цикл: сайт фильтруется по октетам месяца/года номера заключения.
             for (DateOnly month = _periodStart; month <= _periodEnd; month = month.AddMonths(1))
             {
-                try
-                {
-                    await ProcessMonthAsync(searchTerm, month);
-                }
-                catch (Exception ex)
-                {
-                    // Сбой одного месяца (после всех повторов) не должен прерывать остальные.
-                    Log.Error($"{searchTerm} {month:yyyyMM}: месяц не обработан: {ex.Message}");
-                }
+                jobs.Add((searchTerm, month));
             }
         }
+
+        await Parallel.ForEachAsync(jobs, new ParallelOptions { MaxDegreeOfParallelism = _termParallelism },
+            async (job, _) =>
+        {
+            try
+            {
+                await ProcessMonthAsync(job.Term, job.Month);
+            }
+            catch (Exception ex)
+            {
+                // Сбой одного месяца (после всех повторов) не должен прерывать остальные.
+                Log.Error($"{job.Term} {job.Month:yyyyMM}: месяц не обработан: {ex.Message}");
+            }
+        });
 
         Log.Phase("Сбор завершён");
     }
@@ -273,17 +283,44 @@ internal partial class Program
         {
             try
             {
+                // Адаптивный дроссель: сервер после серии быстрых запросов перестаёт
+                // отдавать данные (таймауты) и «отходит» при замедлении. Пауза растёт
+                // при ошибках и плавно тает при успехах — качаем на максимуме,
+                // который сайт готов отдавать прямо сейчас.
+                int pause = Volatile.Read(ref _throttleMs);
+                if (pause > 0)
+                {
+                    await Task.Delay(pause, cancellationToken);
+                }
+
                 Log.Info($"{searchTerm} {month:yyyyMM}: качаю страницу {pageIndex} (попытка {attempt}/{_maxAttempts})");
-                return await FetchPageAsync(searchTerm, month, pageIndex);
+                string page = await FetchPageAsync(searchTerm, month, pageIndex);
+
+                // Успех — сбрасываем темп на четверть (до нуля постепенно).
+                int cur = Volatile.Read(ref _throttleMs);
+                if (cur > 0)
+                {
+                    _ = Interlocked.CompareExchange(ref _throttleMs, cur * 3 / 4, cur);
+                }
+                return page;
             }
             catch (Exception ex) when (attempt < _maxAttempts)
             {
-                Log.Warn($"{searchTerm} {month:yyyyMM}: ошибка на странице {pageIndex} (попытка {attempt}): {ex.Message}");
+                // Ошибка (обычно таймаут) — удваиваем общий тормоз, минимум 2 с.
+                int cur = Volatile.Read(ref _throttleMs);
+                int next = Math.Min(Math.Max(cur * 2, 2000), 30000);
+                _ = Interlocked.CompareExchange(ref _throttleMs, next, cur);
+
+                Log.Warn($"{searchTerm} {month:yyyyMM}: ошибка на странице {pageIndex} (попытка {attempt}): {ex.Message} — общий темп замедлен до паузы {next / 1000.0:F1} с");
                 await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
                 delaySeconds = Math.Min(delaySeconds * 2, 30); // экспоненциальный backoff с потолком
             }
         }
     }
+
+    // Общая для всех потоков пауза перед запросом (мс): растёт при таймаутах
+    // сервера, тает при успехах. 0 — полный ход.
+    private static int _throttleMs;
 
     // Извлекает общее число страниц из блока «Страницы (всего N)» первой страницы.
     private static int ExtractTotalPages(string result)
@@ -355,6 +392,11 @@ internal partial class Program
         if (int.TryParse(config["Processing:Parallelism"], out int par) && par > 0)
         {
             _parallelism = par;
+        }
+
+        if (int.TryParse(config["Processing:TermParallelism"], out int tp) && tp > 0)
+        {
+            _termParallelism = tp;
         }
 
         if (int.TryParse(config["Processing:MaxAttempts"], out int ma) && ma > 0)

@@ -111,8 +111,15 @@ public class Program
             bool downloaded = false;
             if (source.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
-                pbfPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(DbPath))!, "osm_download.pbf");
-                DownloadFile(source, pbfPath);
+                pbfPath = OsmDownloadPath;
+                // Префетч (закачка параллельно импорту ГАР) мог уже скачать файл.
+                if (_osmPrefetch is { } prefetch)
+                {
+                    prefetch.GetAwaiter().GetResult();
+                    _osmPrefetch = null;
+                }
+                if (!File.Exists(pbfPath))
+                    DownloadFile(source, pbfPath);
                 downloaded = true;
             }
             else
@@ -137,6 +144,33 @@ public class Program
         GarImporter.SetMeta(DbPath, "osmImportedAt", DateTime.UtcNow.ToString("O"));
         Log.Ok($"Готово за {sw.Elapsed:hh\\:mm\\:ss}; база: {new FileInfo(DbPath).Length / (double)(1L << 20):F0} МБ");
         return 0;
+    }
+
+    private static string OsmDownloadPath =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(DbPath))!, "osm_download.pbf");
+
+    // Фоновая закачка OSM-выгрузки параллельно импорту ГАР: закачка сетевая,
+    // импорт ГАР по большей части дисково-процессорный — этапы не мешают друг
+    // другу, а суммарное время update сокращается на всю длительность закачки.
+    private static Task? _osmPrefetch;
+
+    private static void StartOsmPrefetchIfNeeded()
+    {
+        if (!IncludeHouses || _osmPrefetch is not null) return;
+        if (!OsmSource.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return;
+        if (File.Exists(OsmDownloadPath)) return;
+        var url = OsmSource;
+        var target = OsmDownloadPath;
+        Log.Info("Запускаю фоновую закачку OSM параллельно импорту ГАР.");
+        _osmPrefetch = Task.Run(() =>
+        {
+            try { DownloadFile(url, target); }
+            catch (Exception ex)
+            {
+                // Не удалось — не страшно: RunImportOsm докачает сам («*.part» сохранён).
+                Log.Warn($"Фоновая закачка OSM не завершилась: {ex.Message} — докачаю на этапе импорта.");
+            }
+        });
     }
 
     private static void DownloadFile(string url, string target)
@@ -519,6 +553,9 @@ public class Program
                 ? "Версия базы неизвестна — полная пересборка."
                 : $"Отставание {deltas.Count} версий — полная пересборка выгоднее дельт.");
             GarSource = latest.GarXMLFullURL ?? GarSource;
+            // Пересборка стирает и osm-таблицы — выгрузка OSM понадобится в любом
+            // случае, качаем её параллельно с импортом ГАР.
+            StartOsmPrefetchIfNeeded();
             var rc = RunImport();
             if (rc == 0)
             {

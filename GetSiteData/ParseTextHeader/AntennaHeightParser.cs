@@ -15,7 +15,7 @@ namespace ParseTextHeader;
 public static partial class AntennaHeightParser
 {
     // «высота подвеса антенны относительно земли: 29; 31 метра», «высота подвеса (от земли): 26,95; 29,8 м»
-    [GeneratedRegex(@"высот[аы]\s+подвеса[^:\n]{0,40}[:\s]\s*([0-9][0-9.,;/\s-]{0,80}?)\s*(?:м\b|метр\w*)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"высот[аы]\s+подвеса[^:\n]{0,40}[:\s(]\s*(?:высота\s+)?([0-9][0-9.,;/\s-]{0,80}?(?:\sи\s[0-9][0-9.,]{0,6})?)\s*(?:м\b|метр\w*)", RegexOptions.IgnoreCase)]
     private static partial Regex PodvesaRx();
 
     // «высота установки антенны над уровнем земли/кровли: 39,48/- м» (86-ХЦ-23 и др.)
@@ -30,12 +30,69 @@ public static partial class AntennaHeightParser
     private static partial Regex NaVysoteRx();
 
     // Единица ПЕРЕД значениями: «высота установки антенны от поверхности земли, м: 50; 49,5»
-    [GeneratedRegex(@"высот[аы][^\n:]{0,70}?,\s*м\s*:\s*([0-9][0-9.,;/\s]{0,60}?)(?=\s*(?:[-–]|[а-яА-Яa-zA-Z(]|$))", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
+    [GeneratedRegex(@"высот[аы][^\n:]{0,70}?,\s*м\s*[:;]\s*([0-9][0-9.,;/\s]{0,60}?)(?=\s*(?:[-–]|[а-яА-Яa-zA-Z(]|$))", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
     private static partial Regex UnitBeforeColonRx();
+
+    // «Высота установки антенн от поверхности земли, м: БС - 42/42/42; РРС - 42, 42»
+    // — значения с метками групп после «м:».
+    [GeneratedRegex(@"высот[аы][^\n:]{0,70}?,\s*м\s*:\s*((?:БС|РРС)\s*[-–—][^\n]{1,100})", RegexOptions.IgnoreCase)]
+    private static partial Regex MetkiPosleMRx();
+
+    // «высота установки от поверхности земли / от опорной поверхности – 13,5/9 м»
+    [GeneratedRegex(@"высот[аы]\s+установки\s+от\s+поверхности[^\n:0-9]{0,60}?[-–—:]\s*([0-9][0-9.,;/\s-]{0,40}?)\s*(?:м\b|метр\w*)", RegexOptions.IgnoreCase)]
+    private static partial Regex OtPoverkhnostiRx();
 
     // Табличная форма: «Высота установки антенны над уровнем земли (над уровнем кровли), м 27.50, Азимут»
     [GeneratedRegex(@"высот[аы]\s+(?:установки|подвеса|размещения)\s+антенн[^\n:]{0,70}?,\s*м\s+([0-9]+(?:[.,][0-9]+)?)", RegexOptions.IgnoreCase)]
     private static partial Regex TableFormRx();
+
+    // «…с азимутами 50/150/310 … на высоте подвеса 38 метров»
+    [GeneratedRegex(@"на\s+высоте\s+подвеса\s+([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*(?:м\b|метр\w*)", RegexOptions.IgnoreCase)]
+    private static partial Regex NaVysotePodvesaRx();
+
+    // Строка таблицы «…Высота подвеса…отн. земли отн. кровли…» без координатной
+    // колонки: хвост строки «21.5 2.5 20 -5 2.72» — высоты, азимут, наклон, мощность.
+    [GeneratedRegex(@"([0-9]{1,3}(?:[.,][0-9]+)?)\s+([0-9]{1,3}(?:[.,][0-9]+)?)\s+[0-9]{1,3}\s+-?[0-9]+\s+[0-9]+(?:[.,][0-9]+)?\s*$", RegexOptions.Multiline)]
+    private static partial Regex TailTableRowRx();
+
+    [GeneratedRegex(@"высота\s+подвеса[\s\S]{0,200}?отн\.\s*земли\s+отн\.\s*кровли", RegexOptions.IgnoreCase)]
+    private static partial Regex TailTableHeaderRx();
+
+    // Строка таблицы с высотой «32,5/-» перед режимом работы «Круглосуточно».
+    [GeneratedRegex(@"([0-9]{1,3}(?:[.,][0-9]+)?)\s*/\s*(-|[0-9]{1,3}(?:[.,][0-9]+)?)\s+Круглосуточно", RegexOptions.IgnoreCase)]
+    private static partial Regex KruglosutochnoRx();
+
+    // «Высота подвеса антенн (м): БС: 38.0/38.0/38.0; РРС: 39.0» — единица в скобках,
+    // значения с метками групп; числа выцепляем из остатка строки.
+    [GeneratedRegex(@"высот[аы]\s+подвеса[^\n(]{0,40}?\(м\)\s*:\s*([^\n]{1,100})", RegexOptions.IgnoreCase)]
+    private static partial Regex PodvesMetkiRx();
+
+    // «на антенной мачте …, высотой 25 м», «опоре высотой 72 м» — высота сооружения,
+    // на котором размещены антенны (единственная высота в документе такого типа).
+    [GeneratedRegex(@"(?:мачт|опор|башн|столб|трубостойк)[а-яё]*[^\n.;]{0,60}?высотой\s+([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*м\b", RegexOptions.IgnoreCase)]
+    private static partial Regex MachtaRx();
+
+    // «высота подвеса отн. зем./кров. 24,2/2,2» — пара «земля/кровля» без единицы
+    // («40/-» — от кровли значения нет).
+    [GeneratedRegex(@"высот[аы]\s+подвеса\s+отн\.?\s*зем(?:ли|\.)?\s*/\s*кров(?:ли|\.)?,?\s*(?:м\.?)?\s*[-–—]?\s*([0-9]+(?:,[0-9]+)?)\s*/\s*([0-9]+(?:,[0-9]+)?|-)", RegexOptions.IgnoreCase)]
+    private static partial Regex ZemKrovRx();
+
+    // «на кровле здания, Н=14м», «опора Н=+33.00 м» — высота размещения через «Н=».
+    [GeneratedRegex(@"[НH]\s*=\s*\+?([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*м\b", RegexOptions.IgnoreCase)]
+    private static partial Regex HEqualsRx();
+
+    // «высота фазового центра антенн от уровня земли/от уровня кровли - 32/- м; 32/- м»
+    [GeneratedRegex(@"высот[аы]\s+(?:установки\s+)?фазового\s+центра[^\n:0-9]{0,70}?[-–—:\s]\s*([0-9][0-9.,;/\s-]{0,80}?)\s*(?:м\b|метр\w*)", RegexOptions.IgnoreCase)]
+    private static partial Regex FazovogoRx();
+
+    // «Высота от уровня земли до точки подвеса проектируемых антенн - 22,0 м»
+    [GeneratedRegex(@"высот[аы][^\n]{0,50}?до\s+точки\s+подвеса[^\n:0-9]{0,50}?[-–—:]?\s*([0-9][0-9.,;/\s-]{0,40}?)\s*(?:м\b|метр\w*)", RegexOptions.IgnoreCase)]
+    private static partial Regex TochkiPodvesaRx();
+
+    // «высота установки антенн от поверхности земли (кровли), м - 75.0 (-)»:
+    // единица перед тире, значение от кровли — в скобках («(-)» — нет значения).
+    [GeneratedRegex(@"высот[аы][^\n:]{0,80}?,\s*м\s*[-–—]\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*\(([^)\n]{1,12})\))?", RegexOptions.IgnoreCase)]
+    private static partial Regex UnitDashRx();
 
     /// <summary>
     /// Все высоты подвеса из документа (уникальные пары «высота+база», в порядке
@@ -48,7 +105,9 @@ public static partial class AntennaHeightParser
         var seen = new HashSet<(double, string?, string?)>();
 
         foreach (var rx in (ReadOnlySpan<Regex>)[PodvesaRx(), UstanovkiRx(), RazmeshcheniyaRx(),
-                     NaVysoteRx(), UnitBeforeColonRx(), TableFormRx()])
+                     NaVysoteRx(), UnitBeforeColonRx(), TableFormRx(), FazovogoRx(),
+                     TochkiPodvesaRx(), UnitDashRx(), HEqualsRx(), PodvesMetkiRx(), MachtaRx(),
+                     NaVysotePodvesaRx(), OtPoverkhnostiRx(), MetkiPosleMRx()])
         {
             foreach (Match m in rx.Matches(fullText))
             {
@@ -62,6 +121,108 @@ public static partial class AntennaHeightParser
                         result.Add(new AntennaHeight(h, baseKind, antenna, number));
                 }
             }
+        }
+
+        // Пара «отн. зем./кров. 24,2/2,2»: первое значение — от земли, второе — от кровли.
+        foreach (Match m in ZemKrovRx().Matches(fullText))
+        {
+            var (antenna, number) = FindAntenna(fullText, m);
+            if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
+                && seen.Add((gh, BaseGround, antenna)))
+                result.Add(new AntennaHeight(gh, BaseGround, antenna, number));
+            if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
+                && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, antenna)))
+                result.Add(new AntennaHeight(rh, BaseRoof, antenna, number));
+        }
+
+        // Значение «от кровли» из формы «…, м - 75.0 (12.5)»: скобочная часть —
+        // вторая база, «(-)» — значения нет.
+        foreach (Match m in UnitDashRx().Matches(fullText))
+        {
+            if (!m.Groups[2].Success || !TryParse(m.Groups[2].Value.Trim('-', ' '), out var roofH)) continue;
+            if (roofH is < 1 or > 500) continue;
+            var (antenna, number) = FindAntenna(fullText, m);
+            if (seen.Add((roofH, BaseRoof, antenna)))
+                result.Add(new AntennaHeight(roofH, BaseRoof, antenna, number));
+        }
+
+        // Перечень «по каждой антенне»: «тип, высота установки антенны от поверхности
+        // земли, азимут…: D6-XI65… - 3 шт., 43 м, 60/180/290 град.» — высота идёт
+        // сразу за «шт.,». Формат опознаём по заголовку перечня.
+        if (ShtHeaderRx().IsMatch(fullText))
+        {
+            foreach (Match m in ShtItemRx().Matches(fullText))
+            {
+                if (!TryParse(m.Groups[1].Value, out var h) || h is < 1 or > 500) continue;
+                if (seen.Add((h, BaseGround, null)))
+                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+            }
+        }
+
+        // Таблица с колонкой «Высота (м) подвеса антенн от уровня земли/крыши»:
+        // в строках высоты помечены плюсом («… 2х60,0 +61,0 120° …»).
+        var plusHeader = PlusTableHeaderRx().Match(fullText);
+        if (plusHeader.Success)
+        {
+            foreach (Match m in PlusValueRx().Matches(fullText, plusHeader.Index))
+            {
+                if (!TryParse(m.Groups[1].Value, out var h) || h is < 1 or > 500) continue;
+                if (seen.Add((h, BaseGround, null)))
+                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+            }
+        }
+
+        // Широкая таблица с колонками «… Высота подвеса … Координаты установки (X;Y) …»:
+        // в строке подряд идут «h_земли h_кровли азимут наклон X;Y» — якорь «X;Y»
+        // однозначно метит поле координат, две высоты стоят за три поля до него.
+        if (WideTableHeaderRx().IsMatch(fullText))
+        {
+            foreach (Match m in WideTableRowRx().Matches(fullText))
+            {
+                if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
+                    && seen.Add((gh, BaseGround, null)))
+                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
+                    && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
+                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+            }
+        }
+
+        // Таблица с последней колонкой «Высота от земли, м».
+        if (LastColHeaderRx().IsMatch(fullText))
+        {
+            foreach (Match m in LastColRowRx().Matches(fullText))
+            {
+                if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
+                    && seen.Add((h, BaseGround, null)))
+                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+            }
+        }
+
+        // Таблица «отн. земли отн. кровли» без координатной колонки: высоты в хвосте
+        // строки перед азимутом/наклоном/мощностью.
+        if (TailTableHeaderRx().IsMatch(fullText))
+        {
+            foreach (Match m in TailTableRowRx().Matches(fullText))
+            {
+                if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
+                    && seen.Add((gh, BaseGround, null)))
+                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                if (TryParse(m.Groups[2].Value, out var rh) && rh is >= 1 and <= 500
+                    && seen.Add((rh, BaseRoof, null)))
+                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+            }
+        }
+
+        // Таблица с высотой «32,5/-» перед колонкой режима «Круглосуточно».
+        foreach (Match m in KruglosutochnoRx().Matches(fullText))
+        {
+            if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
+                && seen.Add((gh, BaseGround, null)))
+                result.Add(new AntennaHeight(gh, BaseGround, null, null));
+            if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
+                && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
+                result.Add(new AntennaHeight(rh, BaseRoof, null, null));
         }
 
         // Фоллбэк уровня документа: высоты остались без антенн, но модели в тексте
@@ -92,6 +253,38 @@ public static partial class AntennaHeightParser
 
         return result.Count > 0 ? result : null;
     }
+
+    // Заголовок широкой таблицы антенн с координатной колонкой.
+    [GeneratedRegex(@"высота\s+подвеса[\s\S]{0,300}?координаты\s+установки", RegexOptions.IgnoreCase)]
+    private static partial Regex WideTableHeaderRx();
+
+    // Строка широкой таблицы: «… 32 - 70 -5 0;0 …» — высоты, азимут, наклон, X;Y.
+    [GeneratedRegex(@"\s([0-9]{1,3}(?:[.,][0-9]+)?)\s+(-|[0-9]{1,3}(?:[.,][0-9]+)?)\s+[0-9]{1,3}\s+-?[0-9]+(?:[.,][0-9]+)?\s+-?[0-9]+(?:[.,][0-9]+)?;-?[0-9]+")]
+    private static partial Regex WideTableRowRx();
+
+    // Таблица с последней колонкой «Высота от … земли, м»: высота — последнее число
+    // строки «А1 RRU5502 1 10.0 RX1004M6R015 DCS-1800 GMSK 17.0 0 86.3».
+    [GeneratedRegex(@"высота\s+от[\s\S]{0,120}?земли,\s*м", RegexOptions.IgnoreCase)]
+    private static partial Regex LastColHeaderRx();
+
+    [GeneratedRegex(@"^[АA]\d{1,2}\s+\S[^\n]*\s([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*$", RegexOptions.Multiline)]
+    private static partial Regex LastColRowRx();
+
+    // Заголовок перечня «по каждой антенне»: высота — второе поле записи после «шт.,».
+    [GeneratedRegex(@"высот[аы]\s+установки\s+антенн\w*\s+от\s+поверхности\s+земли\s*,", RegexOptions.IgnoreCase)]
+    private static partial Regex ShtHeaderRx();
+
+    // Запись перечня: «<тип> - 3 шт., 43 м, …».
+    [GeneratedRegex(@"шт\.?\s*,\s*([0-9]+(?:[.,][0-9]+)?)\s*м\b", RegexOptions.IgnoreCase)]
+    private static partial Regex ShtItemRx();
+
+    // Заголовок табличной колонки высот с плюсовой пометкой значений.
+    [GeneratedRegex(@"высота\s*\(м\)\s*(?:подвеса|фазового\s+центра)", RegexOptions.IgnoreCase)]
+    private static partial Regex PlusTableHeaderRx();
+
+    // «+61,0» — высота из строки такой таблицы (плюс её и метит).
+    [GeneratedRegex(@"\+([0-9]{1,3}(?:[.,][0-9]{1,2})?)\b")]
+    private static partial Regex PlusValueRx();
 
     // «…; тип антенны - A1- ODV-065R17E18; …» — тип в той же записи ПОСЛЕ высоты.
     [GeneratedRegex(@"тип\s+антенн\w*\s*[-:—]\s*([^;\n]{2,60}?)\s*(?:[;\n]|$)", RegexOptions.IgnoreCase)]
@@ -159,8 +352,9 @@ public static partial class AntennaHeightParser
         var hasGround = lc.Contains("земл");
         var hasRoof = lc.Contains("кровл") || lc.Contains("крыш");
 
-        // «земли/кровли» с ровно двумя значениями через слэш — раскладываем по базам.
-        if (hasGround && hasRoof && lc.Contains("земли/кровли"))
+        // «земли/кровли» (в т.ч. «от уровня земли/от уровня кровли») с ровно двумя
+        // значениями через слэш — раскладываем по базам.
+        if (hasGround && hasRoof && (lc.Contains("земли/кровли") || lc.Contains("земли/от")))
         {
             var pair = rawList.Split('/', StringSplitOptions.TrimEntries);
             if (pair.Length == 2)
@@ -190,8 +384,8 @@ public static partial class AntennaHeightParser
     private static IEnumerable<double> ParseList(string raw)
     {
         // Запятая-разделитель списка (за ней пробел) превращается в «;», чтобы не
-        // спутать с десятичной («26,95»).
-        raw = ListCommaRx().Replace(raw, ";");
+        // спутать с десятичной («26,95»); союз «и» перед последним элементом — тоже.
+        raw = ListCommaRx().Replace(raw, ";").Replace(" и ", ";");
 
         foreach (var piece in raw.Split([';', '/'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
@@ -203,12 +397,18 @@ public static partial class AntennaHeightParser
                 if (TryParse(range.Groups[2].Value, out var hi)) yield return hi;
                 continue;
             }
-            if (TryParse(piece.Trim('-', ' '), out var v)) yield return v;
+            if (TryParse(piece.Trim('-', ' '), out var v)) { yield return v; continue; }
+            // Кусок с меткой группы («БС: 38.0», «РРС: 39.0») — берём число из него.
+            var num = LooseNumberRx().Match(piece);
+            if (num.Success && TryParse(num.Groups[1].Value, out var lv)) yield return lv;
         }
     }
 
     [GeneratedRegex(@",\s+")]
     private static partial Regex ListCommaRx();
+
+    [GeneratedRegex(@"(\d{1,3}(?:[.,]\d{1,2})?)")]
+    private static partial Regex LooseNumberRx();
 
     [GeneratedRegex(@"^\s*(\d+(?:[.,]\d+)?)\s*-\s*(\d+(?:[.,]\d+)?)\s*$")]
     private static partial Regex RangeRx();

@@ -22,6 +22,12 @@ public sealed class HttpRangeStream : Stream
     private byte[] _buffer = [];
     private long _bufferStart = -1;
 
+    // Упреждающая закачка: пока ZipArchive разбирает текущий кусок, следующие
+    // качаются параллельно — чтение архива последовательное, и префетч даёт
+    // кратный прирост против одного соединения.
+    private const int PrefetchDepth = 3;
+    private readonly Dictionary<long, Task<byte[]>> _prefetch = [];
+
     public HttpRangeStream(HttpClient http, string url)
     {
         _http = http;
@@ -63,6 +69,29 @@ public sealed class HttpRangeStream : Stream
 
     private void FillBuffer(long from)
     {
+        // Готовый префетч — берём его; иначе качаем синхронно.
+        if (_prefetch.Remove(from, out var ready))
+            _buffer = ready.GetAwaiter().GetResult();
+        else
+            _buffer = DownloadChunk(from);
+        _bufferStart = from;
+        TotalDownloaded += _buffer.Length;
+
+        // Устаревшие префетчи (сик назад/вперёд) не держим.
+        foreach (var key in _prefetch.Keys.Where(k => k <= from).ToList())
+            _prefetch.Remove(key);
+        // Ставим упреждающие закачки следующих кусков.
+        for (int i = 1; i <= PrefetchDepth; i++)
+        {
+            var next = from + (long)ChunkSize * i;
+            if (next >= _length || _prefetch.ContainsKey(next)) continue;
+            var start = next;
+            _prefetch[start] = Task.Run(() => DownloadChunk(start));
+        }
+    }
+
+    private byte[] DownloadChunk(long from)
+    {
         var to = Math.Min(from + ChunkSize, _length) - 1;
         // До пяти попыток на кусок: обрыв соединения не должен ронять весь импорт.
         // На каждый кусок — жёсткий таймаут: сервер ФНС при долгих сессиях начинает
@@ -90,10 +119,7 @@ public sealed class HttpRangeStream : Stream
                     if (read == 0) throw new IOException($"поток оборвался на {filled} из {expected} байт");
                     filled += read;
                 }
-                _buffer = data;
-                _bufferStart = from;
-                TotalDownloaded += filled;
-                return;
+                return data;
             }
             catch (Exception) when (attempt < 5)
             {
