@@ -392,7 +392,13 @@ public sealed partial class AddressMatcher
                         ?? FindDistrictByStem(region.Region, nameKey),
                     // Города Подмосковья и ряда регионов после муниципальной реформы
                     // лежат на уровне 2 («Серпухов г. level 2») — ищем и там (50-99-02).
-                    Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey, typeMarker: typeMarker)
+                    // Строгий типовой проход сначала: «г. Коломна» не должен фуззи-съезжать
+                    // в «д. Колмна», а «г. Клин» — застревать на «д. Клин», когда город
+                    // после реформы лежит на уровне 2 (50-99-02).
+                    Kind.City or Kind.Settlement =>
+                           Find(region.Region, 4, nameKey, allowFuzzy: false, typeMarker: typeMarker, requireType: true)
+                        ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker, requireType: true)
+                        ?? Find(region.Region, 4, nameKey, typeMarker: typeMarker)
                         ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker),
                     Kind.Territory => Find(region.Region, 7, nameKey),
                     // В городах фед. значения якоря-НП нет — якорем служит сам субъект
@@ -566,17 +572,21 @@ public sealed partial class AddressMatcher
         ["станица"] = ["стца", "ст"], ["сл"] = ["сл"],
     };
 
-    private Node? Find(int region, int group, string key, bool allowFuzzy = true, string? typeMarker = null)
+    private Node? Find(int region, int group, string key, bool allowFuzzy = true, string? typeMarker = null,
+                       bool requireType = false)
     {
         if (key.Length == 0) return null;
         if (_index.TryGetValue((region, group, key), out var exact))
         {
-            if (typeMarker != null && exact.Count > 1
-                && SettlementTypeSynonyms.TryGetValue(typeMarker, out var allowed))
+            if (typeMarker != null && SettlementTypeSynonyms.TryGetValue(typeMarker, out var allowed))
             {
                 var filtered = exact.Where(c => allowed.Contains(TypeKey(c.Type))).ToList();
                 if (filtered.Count > 0) return filtered[0];
+                // Строгий режим: тип из документа обязателен — «г. Клин» не должен
+                // застревать на «д. Клин», ниже есть город уровня 2 (50-99-02).
+                if (requireType) return null;
             }
+            if (requireType && typeMarker != null) return null;
             // Единственный кандидат, но тип из документа ему противоречит — при наличии
             // маркера это скорее НЕ тот объект… однако лучше согласованный НП с другим
             // типом, чем ничего: канонизация типов по ГАР — осознанное правило.
