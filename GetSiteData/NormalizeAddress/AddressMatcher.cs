@@ -695,8 +695,11 @@ public sealed partial class AddressMatcher
         }
 
         // Нечёткий поиск улицы — только в границах найденного города/района:
-        // на всём регионе похожих имён слишком много.
+        // на всём регионе похожих имён слишком много. И только когда ТОЧНОГО имени
+        // в регионе нет вовсе: существующее имя — не опечатка, и фуззи не должен
+        // превращать «Режевскую» в «Ржевскую» (66-01-32).
         if (parentHint == null) return null;
+        if (_index.ContainsKey((region, 8, key))) goto suffixOnly;
         var max = FuzzyLimit(key);
         Node? best = null;
         int bestDist = max + 1;
@@ -715,6 +718,7 @@ public sealed partial class AddressMatcher
         }
         if (best != null) return best;
 
+        suffixOnly:
         // «Фролова ул» в документе против «ул. Генерала Фролова» в ГАР — почётная
         // приставка опущена. Уникальный под якорем суффикс-тёзка — совпадение (51-01-04).
         if (key.Length >= 5)
