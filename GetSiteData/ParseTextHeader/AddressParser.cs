@@ -547,6 +547,9 @@ public static partial class AddressParser
                 // жилого дома по адресу:» — родительный, станция НА доме — не задевается (61-РЦ-06).
                 var preBa = ByAddressPrefixRx().Match(m.Groups[1].Value);
                 if (preBa.Success && ForeignNeighborPrefixRx().IsMatch(preBa.Groups["prefix"].Value)) continue;
+                // Адрес НЕпостроенной станции из истории согласований — не наш (78-01-47).
+                if (m.Groups[1].Value.Contains("не была построена", StringComparison.OrdinalIgnoreCase)
+                    || m.Groups[1].Value.Contains("не построена", StringComparison.OrdinalIgnoreCase)) continue;
                 // Мусорный префикс до «по адресу:» режем ДО стоп-слов: в рязанской серии
                 // (62-РЦ-03) префикс «№29301 "…" … стандартов DCS-1800 … по адресу: Рязанская…»
                 // содержит стоп-слово «стандарт», и обрезка по нему съедала весь адрес.
@@ -1001,7 +1004,7 @@ public static partial class AddressParser
     private static partial Regex GluedBsOwnerRx();
 
     // Огрызки, остающиеся в самом хвосте после срезов стоп-словами.
-    [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$|,?\s*в\s+границах\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex TrailingScrapRx();
 
     // Номер сноски/страницы, прилипший после точки в конце адреса из приложения:
