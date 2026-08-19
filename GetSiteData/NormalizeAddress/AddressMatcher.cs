@@ -51,6 +51,7 @@ public sealed partial class AddressMatcher
             FROM addr_obj a LEFT JOIN hierarchy h ON h.objectid = a.objectid
             """;
         using var r = cmd.ExecuteReader();
+        var regionNodes = new List<(string Key, Node Node)>();
         while (r.Read())
         {
             var n = new Node(r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
@@ -59,12 +60,8 @@ public sealed partial class AddressMatcher
             var key = NormalizeName(n.Name);
             if (n.Level == 1)
             {
-                _regionsByKey.TryAdd(key, n);
+                regionNodes.Add((key, n));
                 _regionByCode.TryAdd(n.Region, n);
-                // Регион ищется и по «опорному» слову: «Башкортостан» из «Республика
-                // Башкортостан», «Саха» и «Якутия» из «Саха /Якутия/».
-                foreach (var word in SignificantWords(n.Name))
-                    _regionsByKey.TryAdd(word, n);
             }
             else
             {
@@ -88,6 +85,12 @@ public sealed partial class AddressMatcher
                 }
             }
         }
+        // Сначала ПОЛНЫЕ имена регионов, потом «опорные» слова: иначе слово «ненецкий»
+        // из «Ямало-Ненецкий» перехватывало полный ключ «Ненецкий» АО (29-01-02).
+        foreach (var (key, n) in regionNodes) _regionsByKey.TryAdd(key, n);
+        foreach (var (_, n) in regionNodes)
+            foreach (var word in SignificantWords(n.Name))
+                _regionsByKey.TryAdd(word, n);
         Log.Info($"Матчер: {_nodes.Count:N0} объектов ГАР в памяти");
     }
 
@@ -465,7 +468,10 @@ public sealed partial class AddressMatcher
             var wClean = w.Trim('-');
             if (wClean.Length > 0 && TypeMarkers.TryGetValue(wClean, out var k))
             {
-                if (kind == Kind.Unknown) { kind = k; marker = wClean; }
+                if (kind == Kind.Unknown) { kind = k; marker = wClean; continue; }
+                // Второе слово-тип улицы после уже съеденного маркера — часть ИМЕНИ:
+                // «ул. 2-я Аллея», «ул. Новоникольское шоссе» (32-БО-21).
+                if (kind == Kind.Street && k == Kind.Street) { nameWords.Add(w); }
                 continue;
             }
             // Одинокие буквы-обломки («о» от «г.о.») именем не являются.
