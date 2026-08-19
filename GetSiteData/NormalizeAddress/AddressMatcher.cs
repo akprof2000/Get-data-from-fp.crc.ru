@@ -188,6 +188,10 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@"\bпо\s+((?:ул\.?|улице|пер\.?|переулку|пр\.?|проспекту|шоссе|ш\.)\s*[А-ЯЁ][^,()]*)", RegexOptions.None)]
     private static partial Regex PoStreetRx();
 
+    // НП внутри приметы места: «в 6-ти км от г. Камень-на-Оби в южном направлении».
+    [GeneratedRegex(@"\bот\s+((?:г|пгт|с|п|д|рп)\.\s?[А-ЯЁ][А-Яа-яё-]*(?:\s[А-ЯЁ][А-Яа-яё-]*)*)", RegexOptions.None)]
+    private static partial Regex FromPlaceRx();
+
     // Служебные префиксы перед адресом: «Ориентир: …», «РФ, …», «Россия, …».
     [GeneratedRegex(@"^\s*(?:ориентир|адрес|рф|россия|российская\s+федерация)\s*[:.,]?\s*", RegexOptions.IgnoreCase)]
     private static partial Regex LeadJunkRx();
@@ -215,9 +219,14 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@",?\s+(?:д|дом|зд|влд|уч)\.?\s*№?\s*(\d+\S*)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex BuildingTailRx();
 
-    // «…р-н г. …», «…район с. …» — пропущенная запятая между районом и НП.
-    [GeneratedRegex(@"(\bр-н|\bрайон)\s+(?=(?:г|с|п|пгт|д|ст|х|рп)\.\s?[А-ЯЁ])")]
+    // «…р-н г. …», «…район с. …», «…р-н. с. …» (точка вместо запятой, 22-01-10) —
+    // пропущенная запятая между районом и НП.
+    [GeneratedRegex(@"(\bр-н|\bрайон)\.?\s+(?=(?:г|с|п|пгт|д|ст|х|рп)\.\s?[А-ЯЁ])")]
     private static partial Regex MissingCommaRx();
+
+    // «с. Боровиха на расстоянии 220 м…» — примета приклеена к НП без запятой (22-01-14).
+    [GeneratedRegex(@"(?<=[а-яё])\s+(?=на\s+расстоянии\b)", RegexOptions.IgnoreCase)]
+    private static partial Regex BeforeDistanceRx();
 
     // Почтовый индекс отдельным сегментом («117418») — служебный, выбрасываем.
     [GeneratedRegex(@"^\d{6}$")]
@@ -236,6 +245,7 @@ public sealed partial class AddressMatcher
         // «Курганинский р-н г. Курганинск» — два топонима без запятой: вставляем её,
         // иначе сегмент с двумя маркерами давал нечитаемый ключ (23-КК-10).
         rawAddress = MissingCommaRx().Replace(rawAddress, "$1, ");
+        rawAddress = BeforeDistanceRx().Replace(rawAddress, ", ");
 
         var segments = rawAddress.Split([',', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         for (int si = 0; si < segments.Length; si++)
@@ -396,7 +406,10 @@ public sealed partial class AddressMatcher
                         case 2: district ??= node; break;
                         // «г. Кинель, пгт. Алексеевка» — второй НП вложен в первый:
                         // углубляем место, улицы ищутся под посёлком (63-СЦ-04).
-                        case 4 when place != null && IsDescendantOf(node, place.Id): place = node; break;
+                        case 4 when place != null && IsDescendantOf(node, place.Id):
+                            // «г. Сочи, с. Эстосадок»: углубляем место, но ГОРОД сохраняем (23-КК-10).
+                            if (place.Level == 5 || TypeKey(place.Type) == "г") result.City = place.Name;
+                            place = node; break;
                         case 4: place ??= node; break;
                         case 7: territory ??= node; break;
                         default: street ??= node; break;
@@ -417,6 +430,17 @@ public sealed partial class AddressMatcher
                 {
                     var (_, nk2, tm2) = ClassifySegment(pm.Groups[1].Value);
                     street = FindStreet(region.Region, nk2, place ?? territory ?? district ?? FedCityAnchor(region), tm2 ?? "ул");
+                }
+            }
+            // …и НП тоже: «в 6-ти км от г. Камень-на-Оби в южном направлении» (22-01-14).
+            if (place == null && region != null)
+            {
+                var pp = FromPlaceRx().Match(seg);
+                if (pp.Success)
+                {
+                    var (_, nk3, tm3) = ClassifySegment(pp.Groups[1].Value);
+                    place = Find(region.Region, 4, nk3, typeMarker: tm3)
+                         ?? Find(region.Region, 2, nk3, allowFuzzy: false, typeMarker: tm3);
                 }
             }
             // Отщеплённый дом возвращаем сегменту, чтобы примета места осталась целой.
