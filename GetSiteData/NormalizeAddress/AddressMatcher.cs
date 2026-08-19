@@ -184,6 +184,10 @@ public sealed partial class AddressMatcher
         ["янао"] = 89, ["нао"] = 83, ["мо"] = 50, ["ло"] = 47,
     };
 
+    // Улица внутри приметы места: «…д. 1 по ул. Чайковского», «по улице Старая Константиновка».
+    [GeneratedRegex(@"\bпо\s+((?:ул\.?|улице|пер\.?|переулку|пр\.?|проспекту|шоссе|ш\.)\s*[А-ЯЁ][^,()]*)", RegexOptions.None)]
+    private static partial Regex PoStreetRx();
+
     // Служебные префиксы перед адресом: «Ориентир: …», «РФ, …», «Россия, …».
     [GeneratedRegex(@"^\s*(?:ориентир|адрес|рф|россия|российская\s+федерация)\s*[:.,]?\s*", RegexOptions.IgnoreCase)]
     private static partial Regex LeadJunkRx();
@@ -404,6 +408,17 @@ public sealed partial class AddressMatcher
             }
 
             // Ничего не нашли — это описательная часть места (опора, столб, расстояние).
+            // Но улица бывает ВНУТРИ приметы: «в 28 м. севернее д. 1 по ул. Чайковского»
+            // (02-БЦ-01) — вытаскиваем её, примета остаётся целой в extra.
+            if (street == null && region != null)
+            {
+                var pm = PoStreetRx().Match(seg);
+                if (pm.Success)
+                {
+                    var (_, nk2, tm2) = ClassifySegment(pm.Groups[1].Value);
+                    street = FindStreet(region.Region, nk2, place ?? territory ?? district ?? FedCityAnchor(region), tm2 ?? "ул");
+                }
+            }
             // Отщеплённый дом возвращаем сегменту, чтобы примета места осталась целой.
             extras.Add(tailBuilding != null ? $"{seg}, д. {tailBuilding}" : seg);
         }
@@ -617,23 +632,47 @@ public sealed partial class AddressMatcher
         if (key.Length >= 5)
         {
             Node? suffixHit = null;
-            var suffix = " " + key;
+            // Ключи отсортированы по словам, поэтому не суффикс, а НАДМНОЖЕСТВО слов:
+            // «гагарина» ⊂ «гагарина юрия» («ул. Юрия Гагарина»), «фролова» ⊂
+            // «генерала фролова» — 1–2 опущенных слова-приставки (51-01-04, 02-БЦ-01).
+            var qw = key.Split(' ');
             string[]? suffixAllowed = typeMarker != null && StreetTypeSynonyms.TryGetValue(typeMarker, out var sa) ? sa : null;
             foreach (var ((r, g, k), nodes) in _index)
             {
-                if (r != region || g != 8 || !k.EndsWith(suffix, StringComparison.Ordinal)) continue;
+                if (r != region || g != 8) continue;
+                var kws = k.Split(' ');
+                if (kws.Length <= qw.Length || kws.Length > qw.Length + 2) continue;
+                if (!qw.All(w => kws.Contains(w))) continue;
                 foreach (var c in nodes)
                 {
                     // Тип из документа сужает тёзок и здесь: «ул. Менделеева» ≠ «пер.
                     // Дмитрия Менделеева» (72-ОЦ-01).
                     if (suffixAllowed != null && !suffixAllowed.Contains(TypeKey(c.Type))) continue;
                     if (!IsDescendantOf(c, parentHint.Id)) continue;
-                    if (suffixHit != null && c.Id != suffixHit.Id) return null;   // неоднозначно
+                    if (suffixHit != null && c.Id != suffixHit.Id)
+                    {
+                        // Две тёзки под якорем: улица самого города приоритетнее улицы
+                        // вложенного посёлка («ул. Юрия Гагарина» в Уфе и в п. Новые
+                        // Черкассы, 02-БЦ-01); настоящая ничья — отказ.
+                        var a = HasSettlementAncestor(suffixHit, parentHint.Id);
+                        var b = HasSettlementAncestor(c, parentHint.Id);
+                        if (a == b) { suffixHit = null; goto suffixDone; }
+                        if (a) suffixHit = c;
+                        continue;
+                    }
                     suffixHit = c;
                 }
             }
-            return suffixHit;
+            suffixDone:
+            if (suffixHit != null) return suffixHit;
         }
+
+        // «ул. Лесной проезд» — слово-тип внутри имени: пробуем без него, само слово — тип (02-БЦ-01).
+        var kw = key.Split(' ');
+        if (kw.Length > 1)
+            foreach (var w in kw)
+                if (StreetTypeSynonyms.ContainsKey(w))
+                    return FindStreet(region, string.Join(' ', kw.Where(x => x != w)), parentHint, w);
         return null;
     }
 

@@ -147,8 +147,10 @@ public sealed class OsmGeocoder
             // Улицу ищем ТОЛЬКО при известной опоре (точка НП или якорь): без опоры
             // выбор из тёзок — лотерея, «единственная» кривая тёзка в OSM утаскивала
             // сверку за сотни км (02-БЦ-01, «Ленина ул.» в 513 км от Уфы).
-            var refLat = placePt?.Lat ?? anchorLat;
-            var refLon = placePt?.Lon ?? anchorLon;
+            // Якорь-координаты ДОКУМЕНТА точнее центра города: тёзки улиц внутри
+            // большого города («Кольцевая» в Уфе и в Дёме) выбираются по ним (02-БЦ-01).
+            var refLat = anchorLat ?? placePt?.Lat;
+            var refLon = anchorLon ?? placePt?.Lon;
             if (refLat != null
                 && Pick(_streets, OsmImporter.NameKey(addr.Street), refLat, refLon, maxKm: 50) is { } streetPt)
                 return (streetPt.Lat, streetPt.Lon, "улица");

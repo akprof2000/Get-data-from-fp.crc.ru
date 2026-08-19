@@ -1035,6 +1035,10 @@ public static partial class AddressParser
     [GeneratedRegex(@"([^,;()]{3,40}?)\s*,\s*\1(?=\s*,|\s*$)")]
     private static partial Regex DupSegmentRx();
 
+    // Скобка договора аренды: «(по договору: …)» — адрес не места размещения (02-БЦ-01).
+    [GeneratedRegex(@"\s*\(\s*по\s+договору[^)]*\)\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex DogovorParenRx();
+
     // Кадастровая формула ЕГРН: «Установлено относительно ориентира <адрес>» (61-РЦ-06).
     [GeneratedRegex(@"^установлено\s+относительно\s+ориентира[,:\s]*", RegexOptions.IgnoreCase)]
     private static partial Regex LeadOrientirRx();
@@ -1080,6 +1084,8 @@ public static partial class AddressParser
         address = StreetTypeCommaRx().Replace(address, "$1. ");
         address = TrailingSemiNumRx().Replace(address, "");
         address = DupSegmentRx().Replace(address, "$1");
+        // Скобка договора аренды в хвосте: «…столб ИО (по договору: …)» (02-БЦ-01).
+        address = DogovorParenRx().Replace(address, "");
 
         // Отсекаем мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
         // (имя станции/оператора/филиала, попавшее в захват вместе с адресом: «базовая станция
