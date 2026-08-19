@@ -54,7 +54,7 @@ public static partial class AddressParser
         // примета места; кадастровые хвосты покрывает корень «кадастров».
         // «географические» одним словом: лимит захвата обрывает «…Географические кор»
         // до того, как стоп «координат» найдётся (38-ИЦ-06)
-        "кадастров", "координат", "географические",
+        "кадастров", "коорди", "географические",
         "географиеские",        // OCR-опечатка без «ч» (74-50-03)
         " н =",                 // «…башня Н = 26 м» — «Н=» с пробелом перед «=» (69-01-01)
         " h=", " h =",          // латинская H: «…опора ООО "УралИнтегра", H=30 м» (74-50-03)
@@ -443,38 +443,34 @@ public static partial class AddressParser
         // прямо со скобки владельца, пряча настоящий адрес (59-55-20).
         var appendixStart = fullText.IndexOf("\nПриложение", StringComparison.Ordinal);
         if (appendixStart >= 0) appendixStart++;
-        string? appendixResult = null;
-        if (appendixStart >= 0)
-        {
-            appendixResult = TryPatterns(fullText[appendixStart..]);
-            // Кандидат из приложения возвращаем сразу, ТОЛЬКО если он не выглядит обрезанным
-            // переносом строки. В приложении адрес часто заканчивается на середине —
-            // «Место расположения ПРТО: РД, г. Махачкала, …, ул. Красноярская,» — и тогда
-            // в «Проектной документации» лежит более полный вариант с уточнением
-            // («…, напротив д. 50д»), который и надо предпочесть (05-01-01).
-            // Кандидат БЕЗ региона тоже не побеждает мгновенно: в приложении полно
-            // огрызков из СЗЗ-описаний соседних зданий («…жилой дом по адресу: улица
-            // Дзержинского, 105»), а полный адрес станции с регионом лежит в
-            // «Проектной документации» (40-01-05).
-            if (appendixResult != null && !LooksTruncated(appendixResult) && HasRegionRx().IsMatch(appendixResult))
-                return appendixResult;
-        }
+        string? appendixResult = appendixStart >= 0 ? TryPatterns(fullText[appendixStart..]) : null;
 
-        // 2. Ищем в разделе «Проектная документация» (66-01-32, 87-01-03: адрес только там)
+        // 2. Раздел «Проектная документация» — ШАПКА документа. Полный (регион + не
+        // обрезанный) адрес шапки главнее приложения: в документах совместного
+        // использования приложение сплошь и рядом описывает ДРУГУЮ станцию-партнёра
+        // («ул. Проездная, 197» в шапке против «ул. Лукмана Дахшукаева, 195» в
+        // приложении — 20-ЧР-77, 73-ОЦ-11, 15-01-09, 63-СЦ-04). Приложение остаётся
+        // фолбэком для обрезанных шапок («Кабардино-Балкарская Республ», 07-01-04).
         var projDocStart = fullText.IndexOf("Проектная документация", StringComparison.OrdinalIgnoreCase);
+        string? projResult = null;
         if (projDocStart >= 0)
         {
             var projEnd = fullText.IndexOf("СООТВЕТСТВУЕТ", projDocStart, StringComparison.OrdinalIgnoreCase);
             var projSlice = projEnd > projDocStart
                 ? fullText[projDocStart..projEnd]
                 : fullText[projDocStart..Math.Min(projDocStart + 1500, fullText.Length)];
-            var result = TryPatterns(projSlice);
-            // Берём вариант из проектной документации, если он длиннее обрезанного
-            // приложенческого; иначе возвращаемся к приложению.
-            if (result != null && (appendixResult == null || result.Length > appendixResult.Length))
-                return result;
+            projResult = TryPatterns(projSlice);
+            if (projResult != null && !LooksTruncated(projResult) && HasRegionRx().IsMatch(projResult))
+                return projResult;
         }
 
+        // Приложение: цельный кандидат с регионом (прежняя логика, теперь вторым номером).
+        if (appendixResult != null && !LooksTruncated(appendixResult) && HasRegionRx().IsMatch(appendixResult))
+            return appendixResult;
+
+        // Обе секции дали только неполные кандидаты — предпочитаем более длинный.
+        if (projResult != null && (appendixResult == null || projResult.Length > appendixResult.Length))
+            return projResult;
         if (appendixResult != null) return appendixResult;
 
         // 3. Фоллбэк: ищем во всём тексте (покрывает документы без Приложения).
@@ -556,8 +552,12 @@ public static partial class AddressParser
                 // (62-РЦ-03) префикс «№29301 "…" … стандартов DCS-1800 … по адресу: Рязанская…»
                 // содержит стоп-слово «стандарт», и обрезка по нему съедала весь адрес.
                 var candidate = TrimToStopWord(CutJunkByAddressPrefix(m.Groups[1].Value));
-                // «(по договору: …)» — адрес из договора аренды, не место размещения (16-11-10).
-                if (candidate.TrimStart().StartsWith("по договору", StringComparison.OrdinalIgnoreCase)) continue;
+                // «(по договору: …)» / «адрес по договору: …» — адрес из договора аренды,
+                // не место размещения (16-11-10, 02-БЦ-01).
+                if (LeadDogovorRx().IsMatch(candidate)) continue;
+                // Ведущие «фактический адрес размещения БС:» / «фактическое расположение» —
+                // служебный префикс, сам адрес дальше (02-БЦ-01, 05-01-02).
+                candidate = LeadFactualRx().Replace(candidate, "");
                 if (IsValidAddress(candidate))
                     return Clean(candidate);
             }
@@ -1036,6 +1036,18 @@ public static partial class AddressParser
     [GeneratedRegex(@"([^,;()]{3,40}?)\s*,\s*\1(?=\s*,|\s*$)")]
     private static partial Regex DupSegmentRx();
 
+    // Ведущее «[адрес] по договору» — кандидат целиком из договора аренды.
+    [GeneratedRegex(@"^\s*(?:адрес\s+)?по\s+договору\b", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadDogovorRx();
+
+    // Ведущий служебный префикс «фактический адрес размещения БС:» / «фактическое расположение».
+    [GeneratedRegex(@"^\s*фактическ\w*\s+(?:адрес\w*\s+размещени\w*(?:\s+БС)?|адрес[^:\n]{0,30}:|расположени\w*)\s*:?\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadFactualRx();
+
+    // Шифр проекта, прилипший к хвосту: «…Березовка". 4509.006.П.5/0.0003-СЗЗПРТ01"» (10-КЦ-01).
+    [GeneratedRegex(@"["".]*\s*\d{3,4}\.\d{3}\.П\.\S*\s*$")]
+    private static partial Regex TrailingProjCodeRx();
+
     // Скобка договора аренды: «(по договору: …)» — адрес не места размещения (02-БЦ-01).
     [GeneratedRegex(@"\s*\(\s*по\s+договору[^)]*\)\s*", RegexOptions.IgnoreCase)]
     private static partial Regex DogovorParenRx();
@@ -1087,6 +1099,7 @@ public static partial class AddressParser
         address = DupSegmentRx().Replace(address, "$1");
         // Скобка договора аренды в хвосте: «…столб ИО (по договору: …)» (02-БЦ-01).
         address = DogovorParenRx().Replace(address, "");
+        address = TrailingProjCodeRx().Replace(address, "");
 
         // Отсекаем мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
         // (имя станции/оператора/филиала, попавшее в захват вместе с адресом: «базовая станция
