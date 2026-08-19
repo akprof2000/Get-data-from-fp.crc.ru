@@ -433,10 +433,18 @@ public sealed partial class AddressMatcher
                         ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker, requireType: true)
                         ?? Find(region.Region, 4, nameKey, typeMarker: typeMarker, parentHint: district)
                         ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker),
+                    // Повторное упоминание региона/округа («Новомосковский АО» при уже
+                    // найденной Москве) — НЕ искать как улицу: суффикс-фолбэк превращал
+                    // его в «ул. Новомосковскую» (77-01-09).
+                    Kind.Region => null,
                     Kind.Territory => Find(region.Region, 7, nameKey),
                     // В городах фед. значения якоря-НП нет — якорем служит сам субъект
                     // («г. Москва, Рублёвское шоссе», 77-01-09, 78-01-05).
-                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district ?? FedCityAnchor(region), typeMarker),
+                    // Якорь-район в городах фед. значения не работает: улицы в адм.
+                    // иерархии подчинены городу, а не району — фолбэк на субъект (78-01-05).
+                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district ?? FedCityAnchor(region), typeMarker)
+                        ?? (place == null && district != null && FedCityAnchor(region) is { } fca
+                            ? FindStreet(region.Region, nameKey, fca, typeMarker) : null),
                     _ => Find(region.Region, 4, nameKey)          // сегмент без маркера — чаще всего НП
                          ?? Find(region.Region, 2, nameKey)
                          ?? FindStreet(region.Region, nameKey, place ?? territory ?? district ?? FedCityAnchor(region), typeMarker)
@@ -733,7 +741,8 @@ public sealed partial class AddressMatcher
             {
                 if (r != region || g != 8) continue;
                 var kws = k.Split(' ');
-                if (kws.Length <= qw.Length || kws.Length > qw.Length + 2) continue;
+                // До +3 опущенных слов: «ул. Радищева» ↔ «ул. им Радищева А.Н.» (64-01-02).
+                if (kws.Length <= qw.Length || kws.Length > qw.Length + 3) continue;
                 if (!qw.All(w => kws.Contains(w))) continue;
                 foreach (var c in nodes)
                 {
@@ -795,7 +804,7 @@ public sealed partial class AddressMatcher
         _nodes.TryGetValue(node.Parent, out var cur);
         for (int i = 0; i < 8 && cur != null && cur.Id != anchorId; i++)
         {
-            if (cur.Level is >= 4 and <= 6) return true;
+            if (cur.Level is >= 4 and <= 7) return true;
             _nodes.TryGetValue(cur.Parent, out cur);
         }
         return false;

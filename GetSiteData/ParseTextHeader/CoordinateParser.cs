@@ -501,6 +501,10 @@ public static partial class CoordinateParser
     [GeneratedRegex(@"(?<![\d.,])(\d{2})[оО0](\d{1,2})(?=')")]
     private static partial Regex OhZeroDegreeRx();
 
+    // Тот же потерянный «°»-как-ноль, но с пробелом перед минутами: «540 17' 39.5"» (73-ОЦ-11).
+    [GeneratedRegex(@"(?<![\d.,])(\d{2})0\s+(\d{1,2})(?=\s*['′])")]
+    private static partial Regex OhZeroDegreeSpaceRx();
+
     // «56°З1'10,2"» (70-ТС-07) — кириллическая «З» вместо цифры 3 в минутах.
     [GeneratedRegex(@"(?<=°\s?)З(?=\d\s*')")]
     private static partial Regex ZeAsThreeRx();
@@ -675,6 +679,7 @@ public static partial class CoordinateParser
         text = QuestionAsQuoteRx().Replace(text, "\"");
         text = GrDegreeRx().Replace(text, "$1°");
         text = OhZeroDegreeRx().Replace(text, "$1°$2");
+        text = OhZeroDegreeSpaceRx().Replace(text, "$1° $2");
         text = ZeAsThreeRx().Replace(text, "3");
         text = MinuteCommaZeroRx().Replace(text, "$1");
         text = SlashDecimalAfterDirRx().Replace(text, "$1.");
