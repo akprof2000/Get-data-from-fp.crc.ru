@@ -114,11 +114,12 @@ public static class OperatorExtractor
             }
         }
 
-        // 1б. Паттерны без метки «владелец» (общая форма+кавычки) — только известные операторы
+        // 1б. Паттерны без метки «владелец» (общая форма+кавычки) — только известные операторы.
+        // Перебираем ВСЕ вхождения: первое может быть посторонней организацией
+        // (разработчик ООО «ПРОТОН»), а настоящий оператор — дальше по тексту (76-01-10).
         foreach (var rx in GenericOrgRegexes)
         {
-            var m = rx.Match(searchText);
-            if (m.Success)
+            foreach (Match m in rx.Matches(searchText))
             {
                 var raw = NormalizeName(m.Groups[^1].Value);
                 if (KnownOperators.IsKnown(raw))
@@ -142,8 +143,7 @@ public static class OperatorExtractor
         }
         foreach (var rx in GenericOrgRegexes)
         {
-            var m = rx.Match(fullText);
-            if (m.Success)
+            foreach (Match m in rx.Matches(fullText))
             {
                 var raw = NormalizeName(m.Groups[^1].Value);
                 if (KnownOperators.IsKnown(raw))

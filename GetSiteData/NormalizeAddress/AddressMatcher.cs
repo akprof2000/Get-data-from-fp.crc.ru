@@ -586,7 +586,9 @@ public sealed partial class AddressMatcher
             // Под якорем не нашлась, но по региону+типу кандидат единственный — берём его:
             // в городах федерального значения «районы» документа в ГАР отсутствуют,
             // и якорь-подсказка не срабатывает (78-01-05).
-            return byType.Count == 1 ? byType[0] : null;
+            if (byType.Count == 1) return byType[0];
+            // Тёзки есть, но ни одна не под якорем — НЕ сдаёмся: ниже суффиксный фолбэк
+            // найдёт переименованную «ул. Дмитрия Менделеева» по «ул. Менделеева» (72-ОЦ-01).
         }
 
         // Нечёткий поиск улицы — только в границах найденного города/района:
@@ -616,11 +618,15 @@ public sealed partial class AddressMatcher
         {
             Node? suffixHit = null;
             var suffix = " " + key;
+            string[]? suffixAllowed = typeMarker != null && StreetTypeSynonyms.TryGetValue(typeMarker, out var sa) ? sa : null;
             foreach (var ((r, g, k), nodes) in _index)
             {
                 if (r != region || g != 8 || !k.EndsWith(suffix, StringComparison.Ordinal)) continue;
                 foreach (var c in nodes)
                 {
+                    // Тип из документа сужает тёзок и здесь: «ул. Менделеева» ≠ «пер.
+                    // Дмитрия Менделеева» (72-ОЦ-01).
+                    if (suffixAllowed != null && !suffixAllowed.Contains(TypeKey(c.Type))) continue;
                     if (!IsDescendantOf(c, parentHint.Id)) continue;
                     if (suffixHit != null && c.Id != suffixHit.Id) return null;   // неоднозначно
                     suffixHit = c;

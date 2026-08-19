@@ -827,6 +827,11 @@ public static partial class AddressParser
             || JunkPrefixRx().IsMatch(prefix)
             || (prefix.Contains('№') && !PrefixRegionRx().IsMatch(prefix));
         var rest = address[byAddr.Length..];
+        // Срез не должен УХУДШАТЬ адрес: если регион есть в префиксе, а в остатке его
+        // нет — «по адресу:» ссылается на ориентир («г. Кыштым, башня ОАО "РЖД" 50 м
+        // северо-восточнее здания по адресу: ул. Калинина, 3А») — оставляем целиком (74-50-03).
+        if (junkPrefix && PrefixRegionRx().IsMatch(prefix) && !PrefixRegionRx().IsMatch(rest))
+            return address;
         return junkPrefix && rest.Trim().Length >= 10 ? rest : address;
     }
     // Мусорный префикс до «по адресу:»: имя станции/оператора ИЛИ префикс, заканчивающийся
@@ -1022,6 +1027,14 @@ public static partial class AddressParser
     [GeneratedRegex(@"(?<=,\s{0,3})\b(ул|пер|пр|прд|пркт|ш|наб|бр|пл|мкр)\.\s*,\s*(?=[А-ЯЁ][а-яё])", RegexOptions.None)]
     private static partial Regex StreetTypeCommaRx();
 
+    // Обломок координат после точки с запятой: «д. 35; 5» ← «д. 35; 57°09'…» (72-ОЦ-01).
+    [GeneratedRegex(@"(?<=\d[а-яa-z]?)\s*;\s*\d{1,2}\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex TrailingSemiNumRx();
+
+    // Задвоенный сегмент из исходника: «г. Челябинск, г. Челябинск» (74-50-03).
+    [GeneratedRegex(@"([^,;()]{3,40}?)\s*,\s*\1(?=\s*,|\s*$)")]
+    private static partial Regex DupSegmentRx();
+
     // Кадастровая формула ЕГРН: «Установлено относительно ориентира <адрес>» (61-РЦ-06).
     [GeneratedRegex(@"^установлено\s+относительно\s+ориентира[,:\s]*", RegexOptions.IgnoreCase)]
     private static partial Regex LeadOrientirRx();
@@ -1065,6 +1078,8 @@ public static partial class AddressParser
         address = TrailingKCoordsRx().Replace(address, "");
         address = TrailingPageNumRx().Replace(address, "");
         address = StreetTypeCommaRx().Replace(address, "$1. ");
+        address = TrailingSemiNumRx().Replace(address, "");
+        address = DupSegmentRx().Replace(address, "$1");
 
         // Отсекаем мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
         // (имя станции/оператора/филиала, попавшее в захват вместе с адресом: «базовая станция
