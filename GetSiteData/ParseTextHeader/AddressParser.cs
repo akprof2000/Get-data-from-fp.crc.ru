@@ -124,6 +124,7 @@ public static partial class AddressParser
         "антенны прто",         // «…д. 9. Антенны ПРТО размещаются…» (35-ВЦ-02)
         "радиоподсистема",      // «…дом 7. Радиоподсистема сети сотовой…» (05-01-02)
         "проектом предусмотрен",// «…ТРЦ "Мармелад". Проектом предусмотрена модернизация…» (53-01-01)
+        "уровни ",              // «…ул. Кирова, 30, уровни превышают/ниже ПДУ…» (61-РЦ-06)
         " на кровле",                // «…д.34к8 На кровле здания по адресу…» (77-01-09)
     ];
 
@@ -501,7 +502,7 @@ public static partial class AddressParser
     // эпидемиологии…" (Республика Хакасия, г. Абакан, ул. Аскизская, 227)»).
     private static bool HasForeignContext(string text, int matchIndex)
     {
-        var start = Math.Max(0, matchIndex - 60);
+        var start = Math.Max(0, matchIndex - 80);
         var pre = text[start..matchIndex];
         // Скобка сразу после закрывающей кавычки — чужой адрес, ТОЛЬКО если в кавычках
         // было название органа/учреждения («…Центр гигиены и эпидемиологии…" (Республика
@@ -517,8 +518,11 @@ public static partial class AddressParser
         // формулировке адрес СТАНЦИИ идёт сразу после упоминания органа («…заключение,
         // подготовленное аккредитованным органом…, по адресу: Пермский край…», 59-55-20);
         // адрес самого органа отрезает стоп-слово «подготовленное».
+        // СЗЗ-описание СОСЕДНЕГО здания: «(1-этажный жилой дом по адресу: …)» — именительный
+        // падеж и/или этажность выдают чужой дом; пермское «на кровле жилого дома по адресу:»
+        // (родительный, станция НА доме) под шаблон не попадает (61-РЦ-06).
         return System.Text.RegularExpressions.Regex.IsMatch(pre,
-            @"(?:юридическ\w{0,3}|почтов\w{0,3})\s*(?:/?\s*фактическ\w{0,3})?\s*адрес[а-я]{0,3}[\s:]{0,4}(?:\d{6}\s{0,2},?\s{0,3})?$|заявител[^\n]{0,40}$",
+            @"(?:юридическ\w{0,3}|почтов\w{0,3})\s*(?:/?\s*фактическ\w{0,3})?\s*адрес[а-я]{0,3}[\s:]{0,4}(?:\d{6}\s{0,2},?\s{0,3})?$|заявител[^\n]{0,40}$|\d\s*-?\s*этажн(?:ый|ая|ое|ые)[^\n]{0,60}(?:по\s+адресу[\s:]{0,4}|\(\s*)$|жил(?:ой|ая|ое|ые)\s+(?:дом|здан\w*|застройк\w*)[^\n]{0,40}(?:по\s+адресу[\s:]{0,4}|\(\s*)$",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
@@ -531,7 +535,16 @@ public static partial class AddressParser
                 // Совпадению предшествует метка чужого адреса (заявитель, юр.адрес
                 // без двоеточия, орган инспекции) — пробуем следующее вхождение.
                 if (HasForeignContext(text, m.Groups[1].Index)) continue;
-                var candidate = TrimToStopWord(m.Groups[1].Value);
+                // Захват — СЗЗ-описание соседней застройки: «Ближайшая жилая застройка…
+                // (1-этажный жилой дом по адресу: …)». Именительный падеж («жилой дом»,
+                // «этажная застройка») выдаёт чужой дом; пермское «на кровле жилого/5-этажного
+                // жилого дома по адресу:» — родительный, станция НА доме — не задевается (61-РЦ-06).
+                var preBa = ByAddressPrefixRx().Match(m.Groups[1].Value);
+                if (preBa.Success && ForeignNeighborPrefixRx().IsMatch(preBa.Groups["prefix"].Value)) continue;
+                // Мусорный префикс до «по адресу:» режем ДО стоп-слов: в рязанской серии
+                // (62-РЦ-03) префикс «№29301 "…" … стандартов DCS-1800 … по адресу: Рязанская…»
+                // содержит стоп-слово «стандарт», и обрезка по нему съедала весь адрес.
+                var candidate = TrimToStopWord(CutJunkByAddressPrefix(m.Groups[1].Value));
                 if (IsValidAddress(candidate))
                     return Clean(candidate);
             }
@@ -778,6 +791,32 @@ public static partial class AddressParser
     // вплотную к региону («по адресу:Иркутская область»), и срез не срабатывал (38-ИЦ-06).
     [GeneratedRegex(@"^(?<prefix>.*?)\bпо\s+адресу(?:\s*:\s*|\s+)", RegexOptions.IgnoreCase)]
     private static partial Regex ByAddressPrefixRx();
+
+    // Отсекает мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
+    // (имя станции/оператора/филиала: «базовая станция № 66039 … ПАО "ВымпелКом" по адресу:
+    // Чеченская…», «Филиал ПАО "МТС" в г. Санкт-Петербург по адресу: Ленинградская…») или
+    // служебный («расположенная по адресу: …»). Junk-маркер (станци/№/ПАО"/Филиал) главнее
+    // наличия региона в префиксе: у филиала регион — регион ФИЛИАЛА, а не станции (78-01-47).
+    // Легитимные «Хабаровский край, … в 20 м от дома по адресу: Белорусская улица, 33»
+    // junk-маркеров не содержат и не трогаются (27-99-24, 52-СЦ-04).
+    // Приметы СОСЕДНЕГО здания в префиксе до «по адресу:» (именительный падеж).
+    // Голое «застройк» нельзя: «…зоны ограничения застройки) ПРТО: … по адресу: Республика
+    // Коми…» — легитимный префикс станции (11-РЦ-09). Только именительные «жилой дом/здание»,
+    // этажность и «жилая застройка» целиком.
+    [GeneratedRegex(@"жилая\s+застройк|этажн(?:ый|ая|ое|ые)\b|жил(?:ой|ая|ое|ые)\s+(?:дом|здан)", RegexOptions.IgnoreCase)]
+    private static partial Regex ForeignNeighborPrefixRx();
+
+    private static string CutJunkByAddressPrefix(string address)
+    {
+        var byAddr = ByAddressPrefixRx().Match(address);
+        if (!byAddr.Success) return address;
+        var prefix = byAddr.Groups["prefix"].Value;
+        bool junkPrefix = prefix.Length == 0
+            || JunkPrefixRx().IsMatch(prefix)
+            || (prefix.Contains('№') && !PrefixRegionRx().IsMatch(prefix));
+        var rest = address[byAddr.Length..];
+        return junkPrefix && rest.Trim().Length >= 10 ? rest : address;
+    }
     // Мусорный префикс до «по адресу:»: имя станции/оператора ИЛИ префикс, заканчивающийся
     // причастием «расположенной/размещённой» (в т.ч. с хвостом «БС АС6 ГРС …, расположенной»,
     // где номер станции ошибочно попал в захват адреса — 68-01-03, Газпром Тамбов).
@@ -959,6 +998,14 @@ public static partial class AddressParser
     [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex TrailingScrapRx();
 
+    // Кадастровая формула ЕГРН: «Установлено относительно ориентира <адрес>» (61-РЦ-06).
+    [GeneratedRegex(@"^установлено\s+относительно\s+ориентира[,:\s]*", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadOrientirRx();
+
+    // Хвост-координаты после кадастрового «к.»: «…ст. Кагальницкая, к. 46.889200 40.142100» (61-РЦ-06).
+    [GeneratedRegex(@",?\s*к\.\s*\d{2}[.,]\d{4,}[^\n]*$", RegexOptions.IgnoreCase)]
+    private static partial Regex TrailingKCoordsRx();
+
     public static string Clean(string address)
     {
         if (string.IsNullOrWhiteSpace(address)) return address;
@@ -981,11 +1028,17 @@ public static partial class AddressParser
         address = PostalPrefixRx().Replace(address, "");
         // Ведущие знаки-обломки: «: Алтайский край…» (22-01-14).
         address = address.TrimStart(':', ';', ',', ' ');
+        // …и такие же обломки в хвосте: «ул. Маршала Жукова, 221Б:» (61-РЦ-06).
+        address = address.TrimEnd(':', ';', ',', ' ');
         // Склейка «…д. 10АБС ПАО "МТС" расположена…» — владельческий хвост без
         // пробела после номера дома (32-БО-21).
         address = GluedBsOwnerRx().Replace(address, "");
         // Хвосты-огрызки после срезов: «. РЭС», «, з/у» (32-БО-21, 09-КЧ).
         address = TrailingScrapRx().Replace(address, "");
+        // Кадастровые формулы ЕГРН: ведущее «Установлено относительно ориентира»
+        // и хвост «к. 46.889200 40.142100» (61-РЦ-06).
+        address = LeadOrientirRx().Replace(address, "");
+        address = TrailingKCoordsRx().Replace(address, "");
 
         // Отсекаем мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
         // (имя станции/оператора/филиала, попавшее в захват вместе с адресом: «базовая станция
@@ -995,17 +1048,7 @@ public static partial class AddressParser
         // («г. Санкт-Петербург») — это регион ФИЛИАЛА, а не станции (78-01-47). Легитимные же
         // «Хабаровский край, … в 20 м от дома по адресу: Белорусская улица, 33» junk-маркеров
         // не содержат и не трогаются (27-99-24, 52-СЦ-04).
-        var byAddr = ByAddressPrefixRx().Match(address);
-        if (byAddr.Success)
-        {
-            var prefix = byAddr.Groups["prefix"].Value;
-            bool junkPrefix = prefix.Length == 0
-                || JunkPrefixRx().IsMatch(prefix)
-                || (prefix.Contains('№') && !PrefixRegionRx().IsMatch(prefix));
-            var rest = address[byAddr.Length..];
-            if (junkPrefix && rest.Trim().Length >= 10)
-                address = rest;
-        }
+        address = CutJunkByAddressPrefix(address);
         // Убираем повторяющиеся запятые
         address = RepeatedCommaRx().Replace(address, ",");
         // Добавляем пробел после запятой, если его нет: «область,Задонский» → «область, Задонский».
