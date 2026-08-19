@@ -117,6 +117,9 @@ public sealed partial class AddressMatcher
         // Питерские инициалы сторон: «Малый П.С. пр-кт»/«9-я В.О. линия» — склеиваем
         // в слово, иначе одиночные буквы теряются при разборе сегмента (78-01-05).
         lc = lc.Replace("п.с.", " пс ").Replace("в.о.", " во ");
+        // «ул. имени Н.М. Тулайкова» против ГАР «им Тулайкова Н.М.» — сводим к «им» (64-01-02).
+        lc = lc.Replace(" имени ", " им ");
+        if (lc.StartsWith("имени ")) lc = "им " + lc[6..];
         lc = JunkCharsRx().Replace(lc, " ");
         var words = lc.Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries);
         Array.Sort(words, StringComparer.Ordinal);
@@ -172,7 +175,7 @@ public sealed partial class AddressMatcher
         ["б-р"] = Kind.Street, ["бульвар"] = Kind.Street, ["проезd"] = Kind.Street,
         ["проезд"] = Kind.Street, ["тракт"] = Kind.Street, ["аллея"] = Kind.Street,
         ["линия"] = Kind.Street, ["пл"] = Kind.Street, ["площадь"] = Kind.Street,
-        ["прд"] = Kind.Street,
+        ["прд"] = Kind.Street, ["пркт"] = Kind.Street, ["бр"] = Kind.Street,
     };
 
     // Аббревиатуры регионов, встречающиеся в документах. Неоднозначные («ЧР», «РК»)
@@ -426,9 +429,9 @@ public sealed partial class AddressMatcher
                     // в «д. Колмна», а «г. Клин» — застревать на «д. Клин», когда город
                     // после реформы лежит на уровне 2 (50-99-02).
                     Kind.City or Kind.Settlement =>
-                           Find(region.Region, 4, nameKey, allowFuzzy: false, typeMarker: typeMarker, requireType: true)
+                           Find(region.Region, 4, nameKey, allowFuzzy: false, typeMarker: typeMarker, requireType: true, parentHint: district)
                         ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker, requireType: true)
-                        ?? Find(region.Region, 4, nameKey, typeMarker: typeMarker)
+                        ?? Find(region.Region, 4, nameKey, typeMarker: typeMarker, parentHint: district)
                         ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker),
                     Kind.Territory => Find(region.Region, 7, nameKey),
                     // В городах фед. значения якоря-НП нет — якорем служит сам субъект
@@ -530,6 +533,9 @@ public sealed partial class AddressMatcher
                .Replace("п.г.т.", " пгт ")
                .Replace("ж/д ст", " ждст ")
                .Replace("пр-зд", " прд ")
+               // Дефисные типы улиц рвутся сплитом на «пр»+«кт», и «кт» уходит в имя:
+               // «пр-кт Кирова» находил «ул. Кирова» (63-СЦ-04).
+               .Replace("пр-кт", " пркт ").Replace("пр-т", " пркт ").Replace("б-р", " бр ")
                // Питерские стороны: «Малый проспект П.С.», «9-я линия В.О.» (78-01-05).
                .Replace("п.с.", " пс ").Replace("в.о.", " во ");
         var words = JunkCharsRx().Replace(lc, " ")
@@ -603,7 +609,7 @@ public sealed partial class AddressMatcher
     };
 
     private Node? Find(int region, int group, string key, bool allowFuzzy = true, string? typeMarker = null,
-                       bool requireType = false)
+                       bool requireType = false, Node? parentHint = null)
     {
         if (key.Length == 0) return null;
         if (_index.TryGetValue((region, group, key), out var exact))
@@ -611,12 +617,22 @@ public sealed partial class AddressMatcher
             if (typeMarker != null && SettlementTypeSynonyms.TryGetValue(typeMarker, out var allowed))
             {
                 var filtered = exact.Where(c => allowed.Contains(TypeKey(c.Type))).ToList();
-                if (filtered.Count > 0) return filtered[0];
+                // Среди тёзок нужного типа предпочитаем лежащую под найденным районом:
+                // из 8 «Александровок» берём ставропольскую (63-СЦ-04).
+                if (filtered.Count > 0)
+                    return parentHint != null
+                        ? filtered.FirstOrDefault(c => IsDescendantOf(c, parentHint.Id)) ?? filtered[0]
+                        : filtered[0];
                 // Строгий режим: тип из документа обязателен — «г. Клин» не должен
                 // застревать на «д. Клин», ниже есть город уровня 2 (50-99-02).
                 if (requireType) return null;
             }
             if (requireType && typeMarker != null) return null;
+            if (parentHint != null && exact.Count > 1)
+            {
+                var under = exact.Where(c => IsDescendantOf(c, parentHint.Id)).ToList();
+                if (under.Count > 0) return under[0];
+            }
             // Единственный кандидат, но тип из документа ему противоречит — при наличии
             // маркера это скорее НЕ тот объект… однако лучше согласованный НП с другим
             // типом, чем ничего: канонизация типов по ГАР — осознанное правило.
