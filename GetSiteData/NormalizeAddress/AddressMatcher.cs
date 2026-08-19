@@ -345,7 +345,12 @@ public sealed partial class AddressMatcher
                     if (rest.Length > 0)
                     {
                         Array.Sort(rest, StringComparer.Ordinal);
-                        place ??= Find(region.Region, 4, string.Join(' ', rest));
+                        var restKey = string.Join(' ', rest);
+                        // Сначала район, точно и без фуззи: «Ставропольский край. Петровский
+                        // район» угадывался фуззи-поиском как «х. Петровский» (26-01-05).
+                        district ??= Find(region.Region, 2, restKey, allowFuzzy: false);
+                        if (district == null)
+                            place ??= Find(region.Region, 4, restKey, allowFuzzy: false);
                     }
                     continue;
                 }
