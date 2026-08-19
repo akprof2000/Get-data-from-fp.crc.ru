@@ -468,9 +468,19 @@ public static partial class AddressParser
                 return projResult;
         }
 
-        // Приложение: цельный кандидат с регионом (прежняя логика, теперь вторым номером).
+        // Приложение: цельный кандидат с регионом — но только если он ПРОДОЛЖАЕТ адрес
+        // шапки (содержит её последний топоним): обрыв «…Республ» приложение достроит,
+        // а адрес ДРУГОГО места («н.п. Криволучье» в шапке против «с. Дедилово» в
+        // приложении) шапку не перебьёт (71-ТЦ-04, 07-01-04, 52-НЦ-09).
         if (appendixResult != null && !LooksTruncated(appendixResult) && HasRegionRx().IsMatch(appendixResult))
-            return appendixResult;
+        {
+            if (projResult == null) return appendixResult;
+            var lastTok = projResult.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries)
+                .LastOrDefault(w => w.Length >= 4 && w.All(char.IsLetter));
+            if (lastTok == null || appendixResult.Contains(lastTok, StringComparison.OrdinalIgnoreCase))
+                return appendixResult;
+            return projResult;
+        }
 
         // Обе секции дали только неполные кандидаты — шапка достовернее: сравнение по
         // длине проигрывало приложению из-за полных слов («деревня Головин-» длиннее
