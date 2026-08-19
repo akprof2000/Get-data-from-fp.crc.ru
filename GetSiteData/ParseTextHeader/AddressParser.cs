@@ -133,6 +133,8 @@ public static partial class AddressParser
                                 // обрывает слово (05-01-02)
         "проектом предусмотрен",// «…ТРЦ "Мармелад". Проектом предусмотрена модернизация…» (53-01-01)
         "уровни ",              // «…ул. Кирова, 30, уровни превышают/ниже ПДУ…» (61-РЦ-06)
+        " кровле ",             // «…д. 33; кровле 9-ти этажного жилого здания…» — перечень
+                                // соседних кровель из СЗЗ (45-01-06)
         " на кровле",                // «…д.34к8 На кровле здания по адресу…» (77-01-09)
     ];
 
@@ -470,9 +472,10 @@ public static partial class AddressParser
         if (appendixResult != null && !LooksTruncated(appendixResult) && HasRegionRx().IsMatch(appendixResult))
             return appendixResult;
 
-        // Обе секции дали только неполные кандидаты — предпочитаем более длинный.
-        if (projResult != null && (appendixResult == null || projResult.Length > appendixResult.Length))
-            return projResult;
+        // Обе секции дали только неполные кандидаты — шапка достовернее: сравнение по
+        // длине проигрывало приложению из-за полных слов («деревня Головин-» длиннее
+        // «д. Головинское», 44-КЦ-01).
+        if (projResult != null) return projResult;
         if (appendixResult != null) return appendixResult;
 
         // 3. Фоллбэк: ищем во всём тексте (покрывает документы без Приложения).
@@ -835,6 +838,12 @@ public static partial class AddressParser
         // северо-восточнее здания по адресу: ул. Калинина, 3А») — оставляем целиком (74-50-03).
         if (junkPrefix && PrefixRegionRx().IsMatch(prefix) && !PrefixRegionRx().IsMatch(rest))
             return address;
+        // Префикс САМ полный адрес (регион в начале + номер дома): «Курганская область,
+        // г. Курган, 5-й мкр-н, д. 33; кровле … по адресу: … д. 4А» — дальше идут адреса
+        // соседних кровель из СЗЗ, резать нельзя (45-01-06).
+        if (junkPrefix && HasRegionRx().IsMatch(prefix[..Math.Min(45, prefix.Length)])
+            && System.Text.RegularExpressions.Regex.IsMatch(prefix, @"\bд\.\s*\d"))
+            return address;
         return junkPrefix && rest.Trim().Length >= 10 ? rest : address;
     }
     // Мусорный префикс до «по адресу:»: имя станции/оператора ИЛИ префикс, заканчивающийся
@@ -1015,7 +1024,7 @@ public static partial class AddressParser
     private static partial Regex GluedBsOwnerRx();
 
     // Огрызки, остающиеся в самом хвосте после срезов стоп-словами.
-    [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$|,?\s*в\s+границах\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$|,?\s*в\s+границах\s*$|,\s*(?-i:[а-яё]{1,3})\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex TrailingScrapRx();
 
     // Номер сноски/страницы, прилипший после точки в конце адреса из приложения:
