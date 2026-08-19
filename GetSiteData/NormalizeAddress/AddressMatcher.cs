@@ -111,6 +111,9 @@ public sealed partial class AddressMatcher
         // Латинские буквы-омографы (OCR-мешанина «райoн», «c. Шипуново») приводим
         // к кириллице — иначе ключи не совпадают с индексом (22-01-46).
         lc = ReplaceLatinHomoglyphs(lc);
+        // Питерские инициалы сторон: «Малый П.С. пр-кт»/«9-я В.О. линия» — склеиваем
+        // в слово, иначе одиночные буквы теряются при разборе сегмента (78-01-05).
+        lc = lc.Replace("п.с.", " пс ").Replace("в.о.", " во ");
         lc = JunkCharsRx().Replace(lc, " ");
         var words = lc.Split([' ', '-'], StringSplitOptions.RemoveEmptyEntries);
         Array.Sort(words, StringComparer.Ordinal);
@@ -370,10 +373,12 @@ public sealed partial class AddressMatcher
                     Kind.City or Kind.Settlement => Find(region.Region, 4, nameKey, typeMarker: typeMarker)
                         ?? Find(region.Region, 2, nameKey, allowFuzzy: false, typeMarker: typeMarker),
                     Kind.Territory => Find(region.Region, 7, nameKey),
-                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker),
+                    // В городах фед. значения якоря-НП нет — якорем служит сам субъект
+                    // («г. Москва, Рублёвское шоссе», 77-01-09, 78-01-05).
+                    Kind.Street => FindStreet(region.Region, nameKey, place ?? territory ?? district ?? FedCityAnchor(region), typeMarker),
                     _ => Find(region.Region, 4, nameKey)          // сегмент без маркера — чаще всего НП
                          ?? Find(region.Region, 2, nameKey)
-                         ?? FindStreet(region.Region, nameKey, place ?? territory ?? district, typeMarker)
+                         ?? FindStreet(region.Region, nameKey, place ?? territory ?? district ?? FedCityAnchor(region), typeMarker)
                 };
                 if (node != null)
                 {
@@ -441,7 +446,9 @@ public sealed partial class AddressMatcher
                .Replace("р.п.", " рп ")
                .Replace("п.г.т.", " пгт ")
                .Replace("ж/д ст", " ждст ")
-               .Replace("пр-зд", " прд ");
+               .Replace("пр-зд", " прд ")
+               // Питерские стороны: «Малый проспект П.С.», «9-я линия В.О.» (78-01-05).
+               .Replace("п.с.", " пс ").Replace("в.о.", " во ");
         var words = JunkCharsRx().Replace(lc, " ")
             .Split([' '], StringSplitOptions.RemoveEmptyEntries).ToList();
         // Хвост дома внутри сегмента улицы срезаем до классификации.
@@ -555,9 +562,21 @@ public sealed partial class AddressMatcher
 
             if (parentHint == null) return byType.Count == 1 ? byType[0] : null;
             // Улиц с одним именем в регионе много — выбираем ту, что лежит под найденным
-            // городом/районом (подъём по иерархии до 8 уровней).
-            foreach (var c in byType)
-                if (IsDescendantOf(c, parentHint.Id)) return c;
+            // городом/районом (подъём по иерархии до 8 уровней). При якоре-субъекте
+            // (Москва/СПб) тёзки из анклавных городов (Пушкин, Зеленоград) уступают
+            // улице самого города; ничья — честный отказ.
+            var under = byType.Where(c => IsDescendantOf(c, parentHint.Id)).ToList();
+            if (under.Count == 1) return under[0];
+            if (under.Count > 1)
+            {
+                // Обычный якорь-город: несколько узлов-тёзок под ним — это, как правило,
+                // дубликаты одной улицы в ГАР; берём первый (историческое поведение).
+                if (parentHint.Level != 1) return under[0];
+                // Якорь-субъект (Москва/СПб): тёзки из анклавов уступают улице самого
+                // города; настоящая ничья — честный отказ.
+                var core = under.Where(c => !HasSettlementAncestor(c, parentHint.Id)).ToList();
+                return core.Count == 1 ? core[0] : null;
+            }
             // Под якорем не нашлась, но по региону+типу кандидат единственный — берём его:
             // в городах федерального значения «районы» документа в ГАР отсутствуют,
             // и якорь-подсказка не срабатывает (78-01-05).
@@ -620,6 +639,23 @@ public sealed partial class AddressMatcher
             if (n != null) return n;
         }
         return null;
+    }
+
+    // Москва/СПб/Севастополь: субъект сам является городом — им и якорим улицы.
+    private static Node? FedCityAnchor(Node region) =>
+        region.Region is 77 or 78 or 92 ? region : null;
+
+    // Есть ли у узла предок-НП (уровни 4–6) НЕ считая сам якорь: улицы анклавных
+    // городов (Пушкин, Колпино, Зеленоград) при якоре-субъекте менее предпочтительны.
+    private bool HasSettlementAncestor(Node node, long anchorId)
+    {
+        _nodes.TryGetValue(node.Parent, out var cur);
+        for (int i = 0; i < 8 && cur != null && cur.Id != anchorId; i++)
+        {
+            if (cur.Level is >= 4 and <= 6) return true;
+            _nodes.TryGetValue(cur.Parent, out cur);
+        }
+        return false;
     }
 
     private bool IsDescendantOf(Node node, long ancestorId)
