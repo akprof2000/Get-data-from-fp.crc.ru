@@ -382,6 +382,9 @@ public sealed partial class AddressMatcher
                         // Город уровня 2 (реформа МО) — это место, а не район.
                         case 2 when TypeKey(node.Type) == "г": place ??= node; break;
                         case 2: district ??= node; break;
+                        // «г. Кинель, пгт. Алексеевка» — второй НП вложен в первый:
+                        // углубляем место, улицы ищутся под посёлком (63-СЦ-04).
+                        case 4 when place != null && IsDescendantOf(node, place.Id): place = node; break;
                         case 4: place ??= node; break;
                         case 7: territory ??= node; break;
                         default: street ??= node; break;
