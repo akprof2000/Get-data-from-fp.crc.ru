@@ -207,8 +207,9 @@ public sealed partial class AddressMatcher
     [GeneratedRegex(@"^(?:(корп|корпус|к|стр|строение|соор|сооружение|лит|литера|литер|пом|помещение|оф|офис|кв)\.?\s*№?\s*([0-9а-яa-z/-]{1,6})|([0-9]{1,3}[а-яa-z]?))\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex BuildingContinuationRx();
 
-    // Десятичная дробь расстояния, разорванная запятой: «0» + «09 км юго-западнее…».
-    [GeneratedRegex(@"^\d{1,3}$")]
+    // Десятичная дробь расстояния, разорванная запятой: «0» + «09 км юго-западнее…»,
+    // «в 5» + «9 км восточнее…» (54-НС-07).
+    [GeneratedRegex(@"^(?:в\s+)?\d{1,3}$", RegexOptions.IgnoreCase)]
     private static partial Regex DecimalDistanceHeadRx();
 
     // Единица бывает пропущена вовсе: «0,02 западнее дома №254» (23-КК-10).
@@ -248,6 +249,7 @@ public sealed partial class AddressMatcher
         rawAddress = BeforeDistanceRx().Replace(rawAddress, ", ");
 
         var segments = rawAddress.Split([',', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var pendingDistricts = new List<Node>();
         for (int si = 0; si < segments.Length; si++)
         {
             var seg = segments[si].Trim();
@@ -369,14 +371,42 @@ public sealed partial class AddressMatcher
             }
 
             // Регион не указан, но имя района уникально по стране («Майкопский район» —
-            // только в Адыгее): восстанавливаем регион по району.
+            // только в Адыгее): восстанавливаем регион по району. Тёзок из разных
+            // регионов запоминаем — их разрешит следующий сегмент-НП (52-НЦ-09).
             if (region == null && kind == Kind.District
-                && _districtsByKey.TryGetValue(nameKey, out var dcands)
-                && dcands.Select(d => d.Region).Distinct().Count() == 1)
+                && _districtsByKey.TryGetValue(nameKey, out var dcands))
             {
-                district = dcands[0];
-                _regionByCode.TryGetValue(district.Region, out region);
-                continue;
+                if (dcands.Select(d => d.Region).Distinct().Count() == 1)
+                {
+                    district = dcands[0];
+                    _regionByCode.TryGetValue(district.Region, out region);
+                    continue;
+                }
+                pendingDistricts.AddRange(dcands);
+            }
+
+            // Район-тёзка из нескольких регионов + НП: пара однозначна («Починковский
+            // район, п. Ужовка» — Ужовка только в нижегородском Починковском, 52-НЦ-09).
+            if (region == null && kind is Kind.City or Kind.Settlement && pendingDistricts.Count > 0)
+            {
+                Node? hit = null; Node? hitD = null; bool ambiguous = false;
+                foreach (var d in pendingDistricts)
+                {
+                    if (!_index.TryGetValue((d.Region, 4, nameKey), out var cand4)) continue;
+                    foreach (var n2 in cand4)
+                    {
+                        if (!IsDescendantOf(n2, d.Id)) continue;
+                        if (hit != null && n2.Id != hit.Id) { ambiguous = true; break; }
+                        hit = n2; hitD = d;
+                    }
+                    if (ambiguous) break;
+                }
+                if (hit != null && !ambiguous)
+                {
+                    district = hitD; place = hit;
+                    _regionByCode.TryGetValue(hit.Region, out region);
+                    continue;
+                }
             }
 
             if (region != null)
