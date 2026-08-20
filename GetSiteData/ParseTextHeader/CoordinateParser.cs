@@ -104,7 +104,7 @@ public static partial class CoordinateParser
     // «55-25-47 с.ш.; 65-18-27 в.д.» — дефисы вместо символов градусов/минут.
     // После метки широты допускаем точку («с.ш.; 65-…»): нормализация направлений
     // всегда дописывает её, а прежний разделитель «[;\s,]+» точку не принимал.
-    [GeneratedRegex(@"(\d{1,3})[°\-]\s*(\d{1,2})['\-]\s*\.?(\d+(?:[.,]\d+)?)[""'\s]*\s*(?:с\.ш|N)\.?[;\s,]*(\d{2,3})[°\-]\s*(\d{1,2})['\-]\s*\.?(\d+(?:[.,]\d+)?)[""'\s]*\s*(?:в\.д|E)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(\d{1,3})[°\-]\s*(\d{1,2})['\-]\s*\.?(\d+(?:[.,]\d+)?)[""'\s]*\s*(?:град\.?\s*)?(?:с\.ш|N)\.?[;\s,]*(\d{2,3})[°\-]\s*(\d{1,2})['\-]\s*\.?(\d+(?:[.,]\d+)?)[""'\s]*\s*(?:град\.?\s*)?(?:в\.д|E)", RegexOptions.IgnoreCase)]
     private static partial Regex DmsDashRx();
 
     // «(С.Ш.: 49.264318, В.Д.: 44.040832)» — направление с двоеточием перед числом (34-12-01).
@@ -129,13 +129,31 @@ public static partial class CoordinateParser
     // градусами-минутами-секундами: «43.240200 (43°14'24.7") с. ш. 45.066600 …» (06-ИЦ-01).
     // Разделителем пары бывает тире: «57.641500° С.Ш. - 41.394583° В.Д.» (44-КЦ-01).
     // Единицей бывает «гр.» вплотную к числу: «58.202228200гр. с.ш. - 41.799613924 гр. в.д.» (44-КЦ-01).
-    [GeneratedRegex(@"(\d{2,3}[\.,]\d+)\s*(?:\([^)]{5,30}\))?\s*(?:[°""'оО]|гр\.?)*\s*(с\.ш\.?|ю\.ш\.?|n|s)[,;/\s\-–—]+(\d{2,3}[\.,]\d+)\s*(?:\([^)]{5,30}\))?\s*(?:[°""'оО]|гр\.?)*\s*(в\.д\.?|з\.д\.?|e|w)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:WGS\s*)?(\d{2,3}[\.,]\d+)\s*(?:[°""'оО,]|град?\.?)*\s*(?:\([^)]{5,30}\))?\s*(?:[°""'оО,]|град?\.?)*\s*(с\.ш\.?|ю\.ш\.?|n|s)[,;/\s\-–—]+(?:WGS\s*)?(\d{2,3}[\.,]\d+)\s*(?:[°""'оО,]|град?\.?)*\s*(?:\([^)]{5,30}\))?\s*(?:[°""'оО,]|град?\.?)*\s*(в\.д\.?|з\.д\.?|e|w)", RegexOptions.IgnoreCase)]
     private static partial Regex DecDirRx();
 
     // «45°859417 С.Ш. 39°655083 В.Д.» — знак градуса на месте десятичной точки
     // (23-КК-10): целая часть°дробная часть, минут/секунд нет.
-    [GeneratedRegex(@"(\d{2,3})°(\d{4,9})\s*[СC]\.?\s*[Шш]\.?[^\d]{0,10}(\d{2,3})°(\d{4,9})\s*[ВB]\.?\s*[Дд]\.?", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(\d{2,3})[°ю](\d{4,9})[""']{0,2}\s*[СC]\.?\s*[Шш]\.?[^\d]{0,10}(\d{2,3})[°ю.](\d{4,9})[""']{0,2}\s*[ВB]\.?\s*[Дд]\.?", RegexOptions.IgnoreCase)]
     private static partial Regex DegreeAsDotRx();
+
+    // «59 град. 54 мин. 43.30 сек. сев. широты, 30 град. 18 мин. 3.20 сек. вост.
+    // долготы» — полностью словесная запись (78-01-05, 2023).
+    // К моменту разбора NormalizeMarks уже заменил «град./мин./сек.» на «°'"»,
+    // а направление осталось словами: «59° 54' 43.30" сев. широты, 30° 18' 3.20"
+    // вост. долготы».
+    [GeneratedRegex(@"(\d{1,3})\s*°\s*(\d{1,2})\s*'\s*([\d.,]+)\s*""?\s*сев[^,;\n]{0,12}[,;\s]+(\d{1,3})\s*°\s*(\d{1,2})\s*'\s*([\d.,]+)\s*""?\s*вост", RegexOptions.IgnoreCase)]
+    private static partial Regex WordDmsRx();
+
+    // «53°31.10.702. с.ш., 78°9.16.38. в.д.» — минуты и секунды через точки (22-01-03, 2023).
+    [GeneratedRegex(@"(\d{1,3})°(\d{1,2})\.(\d{1,2}(?:\.\d{1,3})?)\.?\s*с\.?\s*ш\.?[^\d]{0,10}(\d{1,3})°(\d{1,2})\.(\d{1,2}(?:\.\d{1,3})?)\.?\s*в\.?\s*д\.?", RegexOptions.IgnoreCase)]
+    private static partial Regex DotDmsRx();
+
+    // «44°54?20.72? С.Ш.» — «?» на месте минутных/секундных маркеров (23-КК, 2023);
+    // «44°37'10.Г' с.ш.» — мусорная буква в секундах (01-РА, 2023): хвост после
+    // точки в секундах игнорируем.
+    [GeneratedRegex(@"(\d{1,3})°(\d{1,2})[?'](\d{1,2})(?:[.,][^\s?'""]{0,4})?[?'""]{0,2}\s*[СC]\.?\s*[Шш]\.?[^\d]{0,10}(\d{1,3})°(\d{1,2})[?'](\d{1,2})(?:[.,][^\s?'""]{0,4})?[?'""]{0,2}\s*[ВB]\.?\s*[Дд]\.?", RegexOptions.IgnoreCase)]
+    private static partial Regex QMarkDmsRx();
 
     // «СШ: 43°10'18.3" ВД: 132°04'59.4"» (25-ПЦ-01), «Ш: 56° 16' 48.6" Д:30° 31' 40.4"» (60-01-06),
     // «широта 53°48'28.4", долгота 88°12'10.1"» (42-21-02) — метка стоит ПЕРЕД градусами
@@ -606,6 +624,20 @@ public static partial class CoordinateParser
     /// <summary>Ищет координаты в переданном фрагменте: сначала по меткам, затем по всему тексту.</summary>
     private static string? ExtractFrom(string text)
     {
+        // Словесный DMS «59 град. 54 мин. 43.30 сек. сев. широты, …» (2023) —
+        // однозначная форма, пробуем по всему тексту раньше меточной логики.
+        var wdms = WordDmsRx().Match(text);
+        if (wdms.Success)
+        {
+            var wl = DmsToDec(wdms.Groups[1].Value, wdms.Groups[2].Value, wdms.Groups[3].Value);
+            var wn = DmsToDec(wdms.Groups[4].Value, wdms.Groups[5].Value, wdms.Groups[6].Value);
+            if (wl is { } wla && wn is { } wlo)
+            {
+                var wf = FormatIfValid(wla, wlo);
+                if (wf != null) return wf;
+            }
+        }
+
         // Сначала пробуем после метки «Географические координаты» — самый надёжный контекст.
         var labelMatch = GeoLabelRx().Match(text);
         if (labelMatch.Success)
@@ -859,6 +891,46 @@ public static partial class CoordinateParser
                 && TryParseCoord(m2.Groups[2].Value, out var lon2))
             {
                 var formatted = FormatIfValid(lat2, lon2);
+                if (formatted != null) return formatted;
+            }
+        }
+
+        // «59 град. 54 мин. 43.30 сек. сев. широты, …» — словесный DMS (2023).
+        var wd = WordDmsRx().Match(text);
+        if (wd.Success)
+        {
+            var wl = DmsToDec(wd.Groups[1].Value, wd.Groups[2].Value, wd.Groups[3].Value);
+            var wn = DmsToDec(wd.Groups[4].Value, wd.Groups[5].Value, wd.Groups[6].Value);
+            if (wl is { } la1 && wn is { } lo1)
+            {
+                var formatted = FormatIfValid(la1, lo1);
+                if (formatted != null) return formatted;
+            }
+        }
+
+        // «53°31.10.702. с.ш., 78°9.16.38. в.д.» — минуты/секунды через точки.
+        var dd0 = DotDmsRx().Match(text);
+        if (dd0.Success)
+        {
+            var l0 = DmsToDec(dd0.Groups[1].Value, dd0.Groups[2].Value, dd0.Groups[3].Value.Replace('.', ','));
+            var n0 = DmsToDec(dd0.Groups[4].Value, dd0.Groups[5].Value, dd0.Groups[6].Value.Replace('.', ','));
+            if (l0 is { } la0 && n0 is { } lo0)
+            {
+                var formatted = FormatIfValid(la0, lo0);
+                if (formatted != null) return formatted;
+            }
+        }
+
+        // «44°54?20.72? С.Ш. 37°33?46.34? В.Д.» — «?» вместо минутных/секундных
+        // маркеров, повреждённые секунды.
+        var qd = QMarkDmsRx().Match(text);
+        if (qd.Success)
+        {
+            var ql = DmsToDec(qd.Groups[1].Value, qd.Groups[2].Value, qd.Groups[3].Value);
+            var qn = DmsToDec(qd.Groups[4].Value, qd.Groups[5].Value, qd.Groups[6].Value);
+            if (ql is { } la2 && qn is { } lo2)
+            {
+                var formatted = FormatIfValid(la2, lo2);
                 if (formatted != null) return formatted;
             }
         }
