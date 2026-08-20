@@ -5,7 +5,7 @@ rem  Запускать из каталога поставки (двойным �
 rem  Настройки - в appsettings.json рядом с этим файлом.
 rem  Пятый, необязательный этап (выгрузка в ClickHouse) НЕ входит
 rem  в цепочку и запускается отдельно:
-rem     python json_to_clickhouse.py --input-dir works/OutputJson
+rem     python json_to_clickhouse.py --input-dir works/OutputNormalized
 rem ============================================================
 setlocal
 
@@ -64,12 +64,11 @@ if not "%RC%"=="0" goto :fail_normalize
 echo.
 echo ============================================
 echo   Готово. Результат:
-echo     works\OutputJson\        - полные записи
-echo     works\OutputErrors\      - неполные записи
+echo     works\OutputJson\        - все записи (у неполных заполнено поле missingFields)
 echo     works\OutputNormalized\  - записи с нормализованным адресом (если есть база ГАР)
 echo.
 echo   Выгрузить в ClickHouse (необязательно):
-echo     python json_to_clickhouse.py --input-dir works/OutputJson
+echo     python json_to_clickhouse.py --input-dir works/OutputNormalized
 echo ============================================
 echo.
 chcp %OLDCP% >nul
