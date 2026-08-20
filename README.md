@@ -103,18 +103,17 @@ works/output  →  works/documents  →  works/cells + works/other  →  works/O
 sequenceDiagram
     participant App as 📥 GetSiteData
     participant Site as 🌐 fp.crc.ru
-    loop Пары «термин × месяц» — по TermParallelism (2) одновременно 🔤📅
-            App->>Site: страница 1 (text_prodnm + text_n_char=ММ, text_n_year=ГГ)
-            Note over App,Site: «холодный» запрос — сервер строит поиск 30–50 с,<br>перекрытие двух пар прячет эту задержку
-            Site-->>App: HTML + число страниц N
-            par До Parallelism (6) параллельных запросов ⚡
-                App->>Site: страницы 2…N (повторы с backoff 🔁)
-                Site-->>App: HTML windows-1251
-            end
-            App->>App: 🚦 адаптивный дроссель: таймаут — общая пауза ×2 (до 30 с),<br>успех — пауза ×¾; качаем на максимуме, который сайт отдаёт
-            App->>App: ✂️ режет страницы на документы по маркеру «hr + номер»
-            App->>App: 💾 сохраняет works/output/термин/ГГГГ/ММ/‹номер заключения и дата›.html<br>(существующие — пропуск ⏭️)
+    loop Пары «термин × месяц» — по TermParallelism одновременно 🔤📅
+        App->>Site: страница 1 (text_prodnm + text_n_char=ММ, text_n_year=ГГ)
+        Note over App,Site: «холодный» запрос — сервер строит поиск 30–50 с,<br>перекрытие двух пар прячет эту задержку
+        Site-->>App: HTML + число страниц N
+        par До Parallelism параллельных запросов ⚡
+            App->>Site: страницы 2…N (повторы с backoff 🔁)
+            Site-->>App: HTML windows-1251
         end
+        Note over App: 🚦 адаптивный дроссель — при таймауте общая пауза<br>удваивается до 30 с, при успехах тает
+        App->>App: ✂️ режет страницы на документы по маркеру «hr + номер»
+        App->>App: 💾 сохраняет works/output/термин/ГГГГ/ММ/‹номер›.html<br>(существующие — пропуск ⏭️)
     end
 ```
 
