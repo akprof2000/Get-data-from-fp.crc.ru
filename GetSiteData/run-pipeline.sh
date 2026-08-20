@@ -39,20 +39,21 @@ echo "============================================"
 echo "  Конвейер fp.crc.ru: сбор -> JSON"
 echo "============================================"
 
-run_step "1/5 Сбор страниц с сайта"            ./GetSiteData
-run_step "2/5 Разбор HTML в тексты документов" ./ParseHTML
-run_step "3/5 Классификация"                   ./MLTextToData process
-run_step "4/5 Извлечение данных в JSON"        ./ParseTextHeader
+run_step "1/6 Сбор страниц с сайта"            ./GetSiteData
+run_step "2/6 Разбор HTML в тексты документов" ./ParseHTML
+run_step "3/6 Классификация"                   ./MLTextToData process
+run_step "4/6 Извлечение данных в JSON"        ./ParseTextHeader
 
 # Нормализация адресов по офлайн-базе ГАР. Базы нет - приложение само пытается
 # её собрать (по URL или из локальной выгрузки GarSource); собрать неоткуда -
 # этап пропускается без ошибки, конвейер продолжается.
-run_step "5/5 Нормализация адресов по ГАР" ./NormalizeAddress normalize
+run_step "5/6 Обновление базы ГАР+OSM"     ./NormalizeAddress update
+run_step "6/6 Нормализация адресов по ГАР" ./NormalizeAddress normalize
 
 echo
 echo "============================================"
 echo "  Готово. Результат:"
-echo "    works/OutputJson/        - полные записи"
+echo "    works/OutputJson/        - все записи (неполные помечены полем missingFields)"
 echo "    works/OutputErrors/      - неполные записи"
 echo "    works/OutputNormalized/  - записи с нормализованным адресом (если есть база ГАР)"
 echo

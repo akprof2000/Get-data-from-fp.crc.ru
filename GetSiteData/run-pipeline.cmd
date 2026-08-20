@@ -17,6 +17,15 @@ chcp 65001 >nul
 
 cd /d "%~dp0"
 
+rem Живой пульт: флаг-файл с именем текущего этапа + фоновый писатель, который
+rem каждые 5 секунд переписывает works\pipeline-status.html (страница сама
+rem обновляется), и открываем её в браузере.
+if not exist "%~dp0works" mkdir "%~dp0works"
+>"%~dp0works\.pipeline-running" echo collect
+start "" /b powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0pipeline-status.ps1"
+timeout /t 2 /nobreak >nul
+start "" "%~dp0works\pipeline-status.html"
+
 rem Приложения вызываем по полному пути "%~dp0<имя>.exe": в окружении может быть
 rem задано NoDefaultCurrentDirectoryInExePath=1, и тогда cmd не ищет программы
 rem в текущем каталоге - вызов по одному имени падал бы с "не является командой".
@@ -29,25 +38,28 @@ echo   Конвейер fp.crc.ru: сбор -^> JSON
 echo ============================================
 
 echo.
-echo [1/5] Сбор страниц с сайта...
+echo [1/6] Сбор страниц с сайта...
 "%~dp0GetSiteData.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_collect
 
 echo.
-echo [2/5] Разбор HTML в тексты документов...
+echo [2/6] Разбор HTML в тексты документов...
+>"%~dp0works\.pipeline-running" echo parse
 "%~dp0ParseHTML.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_parse
 
 echo.
-echo [3/5] Классификация: базовые станции / прочее...
+echo [3/6] Классификация: базовые станции / прочее...
+>"%~dp0works\.pipeline-running" echo ml
 "%~dp0MLTextToData.exe" process
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_ml
 
 echo.
-echo [4/5] Извлечение данных в JSON...
+echo [4/6] Извлечение данных в JSON...
+>"%~dp0works\.pipeline-running" echo extract
 "%~dp0ParseTextHeader.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_extract
@@ -56,7 +68,15 @@ rem Нормализация адресов по офлайн-базе ГАР. �
 rem её собрать (по URL или из локальной выгрузки GarSource); собрать неоткуда -
 rem этап пропускается без ошибки, конвейер продолжается.
 echo.
-echo [5/5] Нормализация адресов по ГАР...
+echo [5/6] Обновление базы ГАР+OSM (при необходимости)...
+>"%~dp0works\.pipeline-running" echo garupdate
+"%~dp0NormalizeAddress.exe" update
+set RC=%errorlevel%
+if not "%RC%"=="0" goto :fail_garupdate
+
+echo.
+echo [6/6] Нормализация адресов по ГАР...
+>"%~dp0works\.pipeline-running" echo normalize
 "%~dp0NormalizeAddress.exe" normalize
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_normalize
@@ -71,23 +91,29 @@ echo   Выгрузить в ClickHouse (необязательно):
 echo     python json_to_clickhouse.py --input-dir works/OutputNormalized
 echo ============================================
 echo.
+>"%~dp0works\.pipeline-running" echo done
+timeout /t 6 /nobreak >nul
+del "%~dp0works\.pipeline-running" >nul 2>&1
 chcp %OLDCP% >nul
 exit /b 0
 
 :fail_collect
-set STEP=1/5 Сбор страниц с сайта
+set STEP=1/6 Сбор страниц с сайта
 goto :fail
 :fail_parse
-set STEP=2/5 Разбор HTML
+set STEP=2/6 Разбор HTML
 goto :fail
 :fail_ml
-set STEP=3/5 Классификация
+set STEP=3/6 Классификация
 goto :fail
 :fail_extract
-set STEP=4/5 Извлечение данных
+set STEP=4/6 Извлечение данных
+goto :fail
+:fail_garupdate
+set STEP=5/6 Обновление базы ГАР
 goto :fail
 :fail_normalize
-set STEP=5/5 Нормализация адресов
+set STEP=6/6 Нормализация адресов
 
 :fail
 echo.
@@ -96,5 +122,6 @@ echo   ОШИБКА на этапе: %STEP% (код %RC%)
 echo   Конвейер остановлен, следующие этапы не запускались.
 echo ============================================
 echo.
+del "%~dp0works\.pipeline-running" >nul 2>&1
 chcp %OLDCP% >nul
 exit /b %RC%

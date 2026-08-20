@@ -44,6 +44,9 @@
     <Content Include="..\run-pipeline.cmd" Link="run-pipeline.cmd" Condition="'$(_PipelineTargetsWindows)' == 'true'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\pipeline-status.ps1" Link="pipeline-status.ps1" Condition="'$(_PipelineTargetsWindows)' == 'true'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\run-pipeline.sh" Link="run-pipeline.sh" Condition="'$(_PipelineTargetsWindows)' != 'true'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
