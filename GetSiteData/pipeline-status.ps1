@@ -44,7 +44,8 @@ while (Test-Path $flag) {
     $title = if ($stage -eq "done") { "Конвейер завершён" } else { "Конвейер работает" }
 @"
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta http-equiv="refresh" content="5"><title>Пульт конвейера fp.crc.ru</title>
+<meta http-equiv="refresh" content="5">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E"><title>Пульт конвейера fp.crc.ru</title>
 <style>
 body{margin:0;padding:32px 16px;background:#f6f5f1;color:#22303a;font:16px/1.5 system-ui,sans-serif}
 .wrap{max-width:840px;margin:0 auto}

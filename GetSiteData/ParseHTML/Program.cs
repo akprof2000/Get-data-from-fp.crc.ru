@@ -57,6 +57,7 @@ internal partial class Program
         _ = Directory.CreateDirectory(OutputDirectory);
         _ = Directory.CreateDirectory(DocumentsDirectory);
 
+        int skippedFast = 0;
         foreach (string item in Directory.EnumerateFiles(OutputDirectory, "*.html", SearchOption.AllDirectories))
         {
             // Единый формат конвейера: обрабатываем только файлы с именем
@@ -65,6 +66,18 @@ internal partial class Program
             if (!DocumentName.IsValidFileName(item))
             {
                 Log.Skip($"Имя не по формату документа: {item}");
+                continue;
+            }
+
+            // Быстрый пропуск без чтения HTML: выходной txt однозначно выводится
+            // из имени входного файла (номер заключения; год/месяц — из его хвоста).
+            // На повторных прогонах и дублях терминов это экономит парсинг десятков
+            // тысяч страниц — этап становится секундным.
+            string baseName = Path.GetFileNameWithoutExtension(item);
+            string doneTxt = Path.Combine(DocumentsDirectory, baseName[^4..], baseName[^7..^5], baseName + ".txt");
+            if (File.Exists(doneTxt))
+            {
+                skippedFast++;
                 continue;
             }
 
@@ -88,6 +101,11 @@ internal partial class Program
                 // Один повреждённый файл не должен прерывать всю пачку.
                 Log.Error($"Не удалось обработать «{item}»: {ex.Message}");
             }
+        }
+
+        if (skippedFast > 0)
+        {
+            Log.Info($"Пропущено без чтения (результат уже есть): {skippedFast:N0}");
         }
     }
 
