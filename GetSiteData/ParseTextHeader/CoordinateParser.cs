@@ -132,6 +132,11 @@ public static partial class CoordinateParser
     [GeneratedRegex(@"(\d{2,3}[\.,]\d+)\s*(?:\([^)]{5,30}\))?\s*(?:[°""'оО]|гр\.?)*\s*(с\.ш\.?|ю\.ш\.?|n|s)[,;/\s\-–—]+(\d{2,3}[\.,]\d+)\s*(?:\([^)]{5,30}\))?\s*(?:[°""'оО]|гр\.?)*\s*(в\.д\.?|з\.д\.?|e|w)", RegexOptions.IgnoreCase)]
     private static partial Regex DecDirRx();
 
+    // «45°859417 С.Ш. 39°655083 В.Д.» — знак градуса на месте десятичной точки
+    // (23-КК-10): целая часть°дробная часть, минут/секунд нет.
+    [GeneratedRegex(@"(\d{2,3})°(\d{4,9})\s*[СC]\.?\s*[Шш]\.?[^\d]{0,10}(\d{2,3})°(\d{4,9})\s*[ВB]\.?\s*[Дд]\.?", RegexOptions.IgnoreCase)]
+    private static partial Regex DegreeAsDotRx();
+
     // «СШ: 43°10'18.3" ВД: 132°04'59.4"» (25-ПЦ-01), «Ш: 56° 16' 48.6" Д:30° 31' 40.4"» (60-01-06),
     // «широта 53°48'28.4", долгота 88°12'10.1"» (42-21-02) — метка стоит ПЕРЕД градусами
     // и записана без точек, поэтому под шаблоны с «с.ш.» не подходила.
@@ -856,6 +861,16 @@ public static partial class CoordinateParser
                 var formatted = FormatIfValid(lat2, lon2);
                 if (formatted != null) return formatted;
             }
+        }
+
+        // «45°859417 С.Ш. 39°655083 В.Д.» — градус на месте десятичной точки.
+        var dd = DegreeAsDotRx().Match(text);
+        if (dd.Success
+            && double.TryParse($"{dd.Groups[1].Value}.{dd.Groups[2].Value}", System.Globalization.NumberStyles.Float, Inv, out var ddLat)
+            && double.TryParse($"{dd.Groups[3].Value}.{dd.Groups[4].Value}", System.Globalization.NumberStyles.Float, Inv, out var ddLon))
+        {
+            var formatted = FormatIfValid(ddLat, ddLon);
+            if (formatted != null) return formatted;
         }
 
         var m = DecDirRx().Match(text);
