@@ -51,16 +51,20 @@ flowchart TB
             PH[✂️ ParseHTML<br>HtmlAgilityPack]
             ML[🧠 MLTextToData<br>ML.NET · LiteDB]
             PTH[🔍 ParseTextHeader<br>GeneratedRegex · Dadata API]
+            NA[🗺️ NormalizeAddress<br>SQLite · OsmSharp · HTTP Range]
         end
-        CMN[🧰 Common<br>Log · NLog · DocumentName · WorkDir]
+        GGD[🌐 GetGarData<br>выгрузка ГАР для закрытого контура]
+        CMN[🧰 Common<br>Log · NLog · DocumentName · WorkDir · MultiPartDownloader]
         GSD --> CMN
         PH --> CMN
         ML --> CMN
         PTH --> CMN
+        NA --> CMN
+        GGD --> CMN
     end
 ```
 
-Каждый этап — независимое консольное приложение. Все четыре лежат **в одном каталоге** и читают **общий `appsettings.json`**, где у каждого этапа своя секция. Данные передаются через файловую систему, поэтому этапы можно запускать по отдельности и перезапускать безопасно: **уже обработанные файлы пропускаются**.
+Каждый этап — независимое консольное приложение. Все пять (плюс вспомогательная GetGarData) лежат **в одном каталоге** и читают **общий `appsettings.json`**, где у каждого этапа своя секция. Данные передаются через файловую систему, поэтому этапы можно запускать по отдельности и перезапускать безопасно: **уже обработанные файлы пропускаются**.
 
 ### 📦 Какой архив релиза выбирать
 
