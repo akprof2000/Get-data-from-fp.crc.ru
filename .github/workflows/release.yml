@@ -80,6 +80,7 @@ jobs:
             # Исполняемые файлы Linux после кросс-публикации теряют бит +x.
             for p in $PROJECTS; do chmod +x "$dir/$p" 2>/dev/null || true; done
             chmod +x "$dir/run-pipeline.sh" 2>/dev/null || true
+            chmod +x "$dir/pipeline-years.sh" 2>/dev/null || true
             tar czf "dist/$base.tar.gz" -C "$dir" .
             echo "asset=dist/$base.tar.gz" >> "$GITHUB_OUTPUT"
           fi

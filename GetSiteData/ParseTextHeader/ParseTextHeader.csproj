@@ -47,6 +47,12 @@
     <Content Include="..\pipeline-status.ps1" Link="pipeline-status.ps1" Condition="'$(_PipelineTargetsWindows)' == 'true'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\pipeline-years.ps1" Link="pipeline-years.ps1" Condition="'$(_PipelineTargetsWindows)' == 'true'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\pipeline-years.sh" Link="pipeline-years.sh" Condition="'$(_PipelineTargetsWindows)' != 'true'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\run-pipeline.sh" Link="run-pipeline.sh" Condition="'$(_PipelineTargetsWindows)' != 'true'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

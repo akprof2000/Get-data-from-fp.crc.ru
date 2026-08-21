@@ -4,7 +4,7 @@
 #  Настройки - в appsettings.json рядом с этим файлом.
 #  Пятый, необязательный этап (выгрузка в ClickHouse) НЕ входит
 #  в цепочку и запускается отдельно:
-#     python3 json_to_clickhouse.py --input-dir works/OutputJson
+#     python3 json_to_clickhouse.py --input-dir works/OutputNormalized
 # ============================================================
 set -u
 cd "$(dirname "$0")"
@@ -39,8 +39,10 @@ echo "============================================"
 echo "  Конвейер fp.crc.ru: сбор -> JSON"
 echo "============================================"
 
-run_step "1/6 Сбор страниц с сайта"            ./GetSiteData
-run_step "2/6 Разбор HTML в тексты документов" ./ParseHTML
+# Этапы 1-2 ведёт pipeline-years.sh: один год — обычная пара "сбор -> разбор",
+# несколько лет — погодовой цикл со сносом HTML каждого года после разбора и
+# отметками works/.years-done (перезапуск продолжает с недособранного года).
+run_step "1-2/6 Сбор страниц и разбор в тексты" ./pipeline-years.sh "$(pwd)"
 run_step "3/6 Классификация"                   ./MLTextToData process
 run_step "4/6 Извлечение данных в JSON"        ./ParseTextHeader
 

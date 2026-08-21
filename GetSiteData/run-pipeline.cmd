@@ -37,18 +37,15 @@ echo ============================================
 echo   Конвейер fp.crc.ru: сбор -^> JSON
 echo ============================================
 
+rem Этапы 1-2 ведёт pipeline-years.ps1: при периоде в один год это обычная пара
+rem "сбор -> разбор", при периоде в несколько лет — погодовой цикл со сносом HTML
+rem каждого года после разбора и отметками works\.years-done (перезапуск после
+rem сбоя продолжает с недособранного года, а не с начала).
 echo.
-echo [1/6] Сбор страниц с сайта...
-"%~dp0GetSiteData.exe"
+echo [1-2/6] Сбор страниц и разбор в тексты...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0pipeline-years.ps1" -Root "%~dp0."
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_collect
-
-echo.
-echo [2/6] Разбор HTML в тексты документов...
->"%~dp0works\.pipeline-running" echo parse
-"%~dp0ParseHTML.exe"
-set RC=%errorlevel%
-if not "%RC%"=="0" goto :fail_parse
 
 echo.
 echo [3/6] Классификация: базовые станции / прочее...
