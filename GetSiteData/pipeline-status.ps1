@@ -207,6 +207,7 @@ $doneBlock
     $sub   = if ($stage -eq "done") { "работа завершена" } elseif ($stage -eq "failed") { "подробности — в logs/" } else { "страница сама обновляется каждые 2 с (состояние блоков сохраняется)" }
 @"
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
+<noscript><meta http-equiv="refresh" content="5"></noscript>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E"><title>Пульт конвейера fp.crc.ru</title>
 <style>
 body{margin:0;padding:32px 16px;background:#f6f5f1;color:#22303a;font:16px/1.5 system-ui,sans-serif}
@@ -287,7 +288,11 @@ $yearsBlock
 })();
 </script>
 </body></html>
-"@ | Set-Content -Path $page -Encoding UTF8
+"@ | Set-Content -Path "$page.tmp" -Encoding UTF8
+    # Пишем во временный файл и переименовываем: страница перезаписывается каждые
+    # 2 секунды, и браузер успевал прочитать её в момент записи — получал обрезанный
+    # HTML без скрипта, после чего автообновление прекращалось до ручного F5.
+    Move-Item -Path "$page.tmp" -Destination $page -Force
     if ($last -eq "done" -or $last -eq "failed") { break }
     Start-Sleep -Seconds 2
 }

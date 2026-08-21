@@ -15,6 +15,13 @@ public partial class Program
     private static string OutputErrorsPath = "OutputErrors";
     // Имя лог-файла в каждом подкаталоге OutputJson
     private const string ProcessedLogFileName = "_processed.json";
+
+    /// <summary>
+    /// Потолок на одно сопоставление. Документы бывают по 700 КБ, и без него
+    /// неудачный паттерн уводил поток в катастрофический бэктрекинг: процесс
+    /// часами жёг ядро и не двигался.
+    /// </summary>
+    internal static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
     private static int MaxParallelism = Environment.ProcessorCount;
     private static int LinesToRead = 12;
 
@@ -192,19 +199,19 @@ public partial class Program
     // Регулярная опечатка «стация»/«стации» вместо «станция»/«станции» — встречается массово в
     // одной серии документов (31-БО-16, Белгородская область). Ограничиваем контекстом «базов...»,
     // чтобы не задеть настоящее слово «стация» (биотоп/место обитания) в других текстах.
-    [GeneratedRegex(@"(?<=[Бб]азов\w{0,3}\s)стаци(?=[ийя]\b)")]
+    [GeneratedRegex(@"(?<=[Бб]азов\w{0,3}\s)стаци(?=[ийя]\b)", RegexOptions.None, 2000)]
     private static partial Regex StaciaTypoRx();
 
     private static string NormalizeKnownTypos(string text) =>
         StaciaTypoRx().Replace(text, "станци");
 
     // Первая строка документа — числовой порядковый номер записи.
-    [GeneratedRegex(@"^(\d+)\b")]
+    [GeneratedRegex(@"^(\d+)\b", RegexOptions.None, 2000)]
     private static partial Regex IndexLineRx();
 
     // «NN.XX.NN.NNN.Т.NNNNNN.NN.NN от DD.MM.YYYY» — номер заключения и дата;
     // XX — 2-4 символа (буквы, цифры, русские буквы: РЦ, БЦ, НС, 01, 99 и т.д.)
-    [GeneratedRegex(@"\d{2}\.[А-ЯЁA-Zа-яёa-z0-9]{2,4}\.\d{2}\.\d{3}\.[ТTТт]\.\d{6}\.\d{2}\.\d{2}\s+от\s+\d{2}\.\d{2}\.\d{4}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\d{2}\.[А-ЯЁA-Zа-яёa-z0-9]{2,4}\.\d{2}\.\d{3}\.[ТTТт]\.\d{6}\.\d{2}\.\d{2}\s+от\s+\d{2}\.\d{2}\.\d{4}", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DocNumberAndDateRx();
 
     private static async Task<ProcessingResult> ProcessFileAsync(FileInfo fileInfo)
@@ -733,25 +740,25 @@ public partial class Program
 
     // Предкомпилированные версии паттернов — создаются один раз, переиспользуются для всех файлов.
     private static readonly (Regex Rx, int Group)[] BsNumberPatterns =
-        [.. BsNumberPatternSources.Select(p => (new Regex(p.Pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled), p.Group))];
+        [.. BsNumberPatternSources.Select(p => (new Regex(p.Pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexTimeout), p.Group))];
 
     // Постобработка захваченного значения номера (не зависят от содержимого документа — можно
     // предкомпилировать раз и навсегда, в отличие от контекстных проверок ниже, где паттерн
     // строится из значения текущего кандидата и потому не может быть статическим).
-    [GeneratedRegex(@"(\d)\s+-\s*(\d)")]
+    [GeneratedRegex(@"(\d)\s+-\s*(\d)", RegexOptions.None, 2000)]
     private static partial Regex InnerSpaceDashRx();
-    [GeneratedRegex(@"-\s+(\d)")]
+    [GeneratedRegex(@"-\s+(\d)", RegexOptions.None, 2000)]
     private static partial Regex DashSpaceDigitRx();
-    [GeneratedRegex(@"^\d+\.\d{2,5}$")]
+    [GeneratedRegex(@"^\d+\.\d{2,5}$", RegexOptions.None, 2000)]
     private static partial Regex DotNumericFormatRx();
     // Две ЛЮБЫЕ буквы подряд (не только заглавные): «86 ст. Москва-Пассажирская-Курская»
     // содержит точку, но не содержит двух заглавных подряд — с прежним [A-ZА-ЯЁ]{2} такое
     // значение отбрасывалось фильтром точек как «число-техпараметр» (77-ОМ-04).
-    [GeneratedRegex(@"[A-Za-zА-ЯЁа-яё]{2}")]
+    [GeneratedRegex(@"[A-Za-zА-ЯЁа-яё]{2}", RegexOptions.None, 2000)]
     private static partial Regex TwoLettersRx();
-    [GeneratedRegex(@"^\d{1,2}$")]
+    [GeneratedRegex(@"^\d{1,2}$", RegexOptions.None, 2000)]
     private static partial Regex OneOrTwoDigitsRx();
-    [GeneratedRegex(@"^\d{4}$")]
+    [GeneratedRegex(@"^\d{4}$", RegexOptions.None, 2000)]
     private static partial Regex FourDigitsRx();
 
     private static string? TryExtractBsNumber(string text)

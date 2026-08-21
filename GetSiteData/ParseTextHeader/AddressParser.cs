@@ -141,14 +141,14 @@ public static partial class AddressParser
     // Regex для числовых уточнений расстояния («55м восточнее», «14,6км северо-западнее», «0,055 км севернее»)
     // Ищем только когда перед «м» или «км» стоит цифра (не буква д/м с точкой — это дом/метро).
     // Lookbehind (?<=\d) гарантирует, что «м» принадлежит числу, а не сокращению.
-    [GeneratedRegex(@",?\s*(?:вблизи\s+(?:в\s+)?)?\d+[,.]?\d*\s*(?:метр\w+|(?<=\d)\s*км\.?|(?<=\d)\s*м\.?)(?:\s+(?:северо?-?\w*|южн\w*|восточн\w*|западн\w*|на\s+\S+))?", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@",?\s*(?:вблизи\s+(?:в\s+)?)?\d+[,.]?\d*\s*(?:метр\w+|(?<=\d)\s*км\.?|(?<=\d)\s*м\.?)(?:\s+(?:северо?-?\w*|южн\w*|восточн\w*|западн\w*|на\s+\S+))?", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DistanceClauseRx();
 
     // «трасс»/«шоссе»/«переезд»/«пост» — километраж дороги — часть адреса, а не хвост дистанции.
     // «квартал/мкр/микрорайон/территория/площадь/парк/переулок/бульвар» добавлены: без них
     // «100,0 м на восток от квартала Энергетиков, 67» резалось как техническая дистанция,
     // хотя это привязка к месту — часть адреса (14-01-01).
-    [GeneratedRegex(@"\b(?:д\.|дом\w*|с\.|пгт\.?|посёлок|поселок|деревня|село|аул|хутор|ст\.|станица|п\.|здани\w*|строени\w*|трасс\w*|шоссе|автодорог\w*|переезд\w*|пост\b|ул\.|улиц\w*|ориентир\w*|пер\.|переул\w*|проспект|пр-т|наб\w*|квартал\w*|мкр|микрорайон\w*|территор\w*|площад\w*|парк\w*|бульвар\w*|б-р|стр\.|влад\w*|уч\.|участ\w*|опор\w*|столб\w*|башн\w*|мачт\w*|вышк\w*|АМС)\s?", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(?:д\.|дом\w*|с\.|пгт\.?|посёлок|поселок|деревня|село|аул|хутор|ст\.|станица|п\.|здани\w*|строени\w*|трасс\w*|шоссе|автодорог\w*|переезд\w*|пост\b|ул\.|улиц\w*|ориентир\w*|пер\.|переул\w*|проспект|пр-т|наб\w*|квартал\w*|мкр|микрорайон\w*|территор\w*|площад\w*|парк\w*|бульвар\w*|б-р|стр\.|влад\w*|уч\.|участ\w*|опор\w*|столб\w*|башн\w*|мачт\w*|вышк\w*|АМС)\s?", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex LocationDescRx();
 
     // «опора …» — обычно технический хвост после адреса (владелец/тип/высота опоры), который надо
@@ -163,11 +163,11 @@ public static partial class AddressParser
     // «…, опора АО …» / «…ул. Гагарина опора» по-прежнему ловится (64-01-02, 13-01-04).
     // Словоформы «опора/опоре/опорой/опору/опоры» — «…на ЖБ опоре ПАО "ВымпелКом", Н=26 м»
     // тоже технический хвост (16-11-10); именительный «опора» покрывает московские адреса-через-опору.
-    [GeneratedRegex(@"(?:,\s*|\s+)опор(?:а|е|ы|у|ой)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:,\s*|\s+)опор(?:а|е|ы|у|ой)\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex OpoRaRx();
 
     // Маркер улицы/проезда — если он ЕСТЬ в префиксе до «опора», значит опора уже хвост (адрес есть).
-    [GeneratedRegex(@"\b(?:ул\.|улиц\w*|пр-т|пр-кт|проспект|шоссе|переул\w*|пер\.|бул\w*|б-р|наб\w*|проезд|тракт|аллея|мкр)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(?:ул\.|улиц\w*|пр-т|пр-кт|проспект|шоссе|переул\w*|пер\.|бул\w*|б-р|наб\w*|проезд|тракт|аллея|мкр)\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex StreetMarkerRx();
 
     // Паттерны «по адресу: …» — ищем сначала в приложении (более точный адрес).
@@ -401,7 +401,7 @@ public static partial class AddressParser
 
     // Предкомпилированные адресные паттерны — один раз на весь прогон.
     private static readonly Regex[] AddressRegexes =
-        [.. AddressPatterns.Select(p => new Regex(p.Pattern, p.Opts | RegexOptions.Compiled))];
+        [.. AddressPatterns.Select(p => new Regex(p.Pattern, p.Opts | RegexOptions.Compiled, Program.RegexTimeout))];
 
     // Последние 6 паттернов («Республика …» без метки «по адресу»/оператора, обратный порядок слов
     // «Алтай Республика, …» и т.п.) — широкие фоллбэки без текстового якоря. В полнотекстовом поиске
@@ -426,12 +426,12 @@ public static partial class AddressParser
 
     // Адрес выглядит завершённым, если оканчивается номером дома/строения/участка,
     // уточнением места (опора, столб, башня…) или названием объекта в кавычках.
-    [GeneratedRegex(@"(?:\d+\s*[а-яa-z]?|[""»]|опор\w*|столб\w*|башн\w*|мачт\w*|АМС|ОДН|вышк\w*|стр\w*|корп\w*)\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:\d+\s*[а-яa-z]?|[""»]|опор\w*|столб\w*|башн\w*|мачт\w*|АМС|ОДН|вышк\w*|стр\w*|корп\w*)\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex EndsWithHouseRx();
 
     // В адресе назван регион (или город фед. значения) — признак полноты: огрызки
     // вида «улица Дзержинского, 105» из СЗЗ-описаний соседних домов его не имеют.
-    [GeneratedRegex(@"область|обл\.|край|[Рр]еспублика|Респ\.?|округ|ХМАО|ЯНАО|ЕАО|\bУР\b|Москва|Санкт-Петербург|Севастополь", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"область|обл\.|край|[Рр]еспублика|Респ\.?|округ|ХМАО|ЯНАО|ЕАО|\bУР\b|Москва|Санкт-Петербург|Севастополь", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex HasRegionRx();
 
     public static string? Extract(string fullText, IReadOnlyList<string> firstLines)
@@ -630,71 +630,71 @@ public static partial class AddressParser
     }
 
     // ── Паттерны отбраковки/валидации (IsValidAddress) ──────────────────────────────────
-    [GeneratedRegex(@"^Проектная\s+документация", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Проектная\s+документация", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ProjectDocHeaderRx();
-    [GeneratedRegex(@"^Фирма-разработчик", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Фирма-разработчик", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DeveloperHeaderRx();
-    [GeneratedRegex(@"^Расчет\s+СЗЗ", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Расчет\s+СЗЗ", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex SzzHeaderRx();
-    [GeneratedRegex(@"^Материалы\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Материалы\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex MaterialsHeaderRx();
-    [GeneratedRegex(@"^Рабоч(?:ая|ий)\s+(?:документац|проект)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Рабоч(?:ая|ий)\s+(?:документац|проект)", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex WorkingDocHeaderRx();
-    [GeneratedRegex(@"^Проект\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Проект\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ProjectHeaderRx();
-    [GeneratedRegex(@"^РП[- ]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^РП[- ]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex RpHeaderRx();
-    [GeneratedRegex(@"\bобл\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bобл\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex OblWordRx();
-    [GeneratedRegex(@"\bЕАО\b")]
+    [GeneratedRegex(@"\bЕАО\b", RegexOptions.None, 2000)]
     private static partial Regex EaoWordRx();
-    [GeneratedRegex(@"\bМосква\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bМосква\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex MoscowWordRx();
-    [GeneratedRegex(@"\bГород\s+Москва\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bГород\s+Москва\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex GorodMoscowRx();
-    [GeneratedRegex(@"^УР[,\s]")]
+    [GeneratedRegex(@"^УР[,\s]", RegexOptions.None, 2000)]
     private static partial Regex UrPrefixRx();
-    [GeneratedRegex(@"\bг\.\s*[А-ЯЁ]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bг\.\s*[А-ЯЁ]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex GDotCityRx();
-    [GeneratedRegex(@"\bг\s+[А-ЯЁ][а-яё]{2,}")]
+    [GeneratedRegex(@"\bг\s+[А-ЯЁ][а-яё]{2,}", RegexOptions.None, 2000)]
     private static partial Regex GSpaceCityRx();
-    [GeneratedRegex(@"\bул\s+[А-ЯЁ]")]
+    [GeneratedRegex(@"\bул\s+[А-ЯЁ]", RegexOptions.None, 2000)]
     private static partial Regex UlSpaceRx();
-    [GeneratedRegex(@"\bр-н\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bр-н\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex RaionAbbrRx();
-    [GeneratedRegex(@"\bпгт\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bпгт\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex PgtWordRx();
-    [GeneratedRegex(@"\bстаница\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bстаница\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex StanitsaWordRx();
-    [GeneratedRegex(@"\bп\.г\.т\.?\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bп\.г\.т\.?\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex PgtDottedRx();
-    [GeneratedRegex(@"\bпгт\.?\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bпгт\.?\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex PgtNamedRx();
-    [GeneratedRegex(@"\bп\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bп\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex PDotNamedRx();
-    [GeneratedRegex(@"\bс\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bс\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex SDotNamedRx();
-    [GeneratedRegex(@"\bпос\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bпос\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex PosDotNamedRx();
-    [GeneratedRegex(@"\bд\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bд\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DDotNamedRx();
-    [GeneratedRegex(@"\bст\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bст\.\s*[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex StDotNamedRx();
-    [GeneratedRegex(@"\bаул\s+[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bаул\s+[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex AulNamedRx();
-    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+г\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+г\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReversedCityRx();
-    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+ул\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+ул\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReversedStreetRx();
-    [GeneratedRegex(@"\b[А-ЯЁа-яё]{3,}\s+д\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b[А-ЯЁа-яё]{3,}\s+д\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReversedHouseRx();
-    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+с\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+с\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReversedSeloRx();
-    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+п\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+п\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReversedPoselokRx();
-    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+пр\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[А-ЯЁа-яё]{3,}\s+пр\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReversedProspektRx();
-    [GeneratedRegex(@"\bдеревня\s+[А-ЯЁа-яё]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bдеревня\s+[А-ЯЁа-яё]", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DerevnyaNamedRx();
 
     /// <summary>Адрес считается валидным если содержит хотя бы один географический признак.</summary>
@@ -813,11 +813,11 @@ public static partial class AddressParser
     }
 
     // ── Паттерны нормализации (Clean) ────────────────────────────────────────────────────
-    [GeneratedRegex(@"\s+")]
+    [GeneratedRegex(@"\s+", RegexOptions.None, 2000)]
     private static partial Regex WhitespaceRunRx();
     // После «по адресу» — двоеточие ИЛИ пробел: в иркутской серии двоеточие идёт
     // вплотную к региону («по адресу:Иркутская область»), и срез не срабатывал (38-ИЦ-06).
-    [GeneratedRegex(@"^(?<prefix>.*?)\bпо\s+адресу(?:\s*:\s*|\s+)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?<prefix>.*?)\bпо\s+адресу(?:\s*:\s*|\s+)", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ByAddressPrefixRx();
 
     // Отсекает мусорный префикс до метки «по адресу:» — ТОЛЬКО когда префикс явно паразитный
@@ -831,7 +831,7 @@ public static partial class AddressParser
     // Голое «застройк» нельзя: «…зоны ограничения застройки) ПРТО: … по адресу: Республика
     // Коми…» — легитимный префикс станции (11-РЦ-09). Только именительные «жилой дом/здание»,
     // этажность и «жилая застройка» целиком.
-    [GeneratedRegex(@"жилая\s+застройк|этажн(?:ый|ая|ое|ые)\b|жил(?:ой|ая|ое|ые)\s+(?:дом|здан)|контрольн", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"жилая\s+застройк|этажн(?:ый|ая|ое|ые)\b|жил(?:ой|ая|ое|ые)\s+(?:дом|здан)|контрольн", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ForeignNeighborPrefixRx();
 
     private static string CutJunkByAddressPrefix(string address)
@@ -866,114 +866,114 @@ public static partial class AddressParser
     // по адресу: Ленинградская область…» — префикс-филиал с регионом филиала (78-01-47).
     // «жилой дом»/«этажн» — префиксы СЗЗ-описаний соседних зданий: «5-этажный жилой
     // дом по адресу: …» — их адрес не адрес станции (02-БЦ-01, 17-01-04, 40-01-05).
-    [GeneratedRegex(@"станци|Филиал|жил\w{0,4}\s+дом|этажн|(?:ПАО|ООО|АО|ЗАО)\s*""|(?:^\s*|,\s*)(?:распол\w+|размещ\w+)\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"станци|Филиал|жил\w{0,4}\s+дом|этажн|(?:ПАО|ООО|АО|ЗАО)\s*""|(?:^\s*|,\s*)(?:распол\w+|размещ\w+)\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex JunkPrefixRx();
     // Слабый junk-маркер «№»: сам по себе номер бывает и в легитимном адресном префиксе
     // («территория мкр № 50, в 17 м на юго-восток от дома по адресу: …», 74-50-03), поэтому
     // «№» срезает префикс ТОЛЬКО когда в нём нет признака региона.
-    [GeneratedRegex(@"область|обл\.|край|Республик|округ|ХМАО|ЯНАО|Москва|Санкт-Петербург|Севастополь", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"область|обл\.|край|Республик|округ|ХМАО|ЯНАО|Москва|Санкт-Петербург|Севастополь", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex PrefixRegionRx();
-    [GeneratedRegex(@"\s*,\s*,+")]
+    [GeneratedRegex(@"\s*,\s*,+", RegexOptions.None, 2000)]
     private static partial Regex RepeatedCommaRx();
-    [GeneratedRegex(@"(?<!\d),(?=\S)")]
+    [GeneratedRegex(@"(?<!\d),(?=\S)", RegexOptions.None, 2000)]
     private static partial Regex CommaNoSpaceRx();
-    [GeneratedRegex(@"\s+\.")]
+    [GeneratedRegex(@"\s+\.", RegexOptions.None, 2000)]
     private static partial Regex SpaceBeforeDotRx();
-    [GeneratedRegex(@"\s+,")]
+    [GeneratedRegex(@"\s+,", RegexOptions.None, 2000)]
     private static partial Regex SpaceBeforeCommaRx();
-    [GeneratedRegex(@"\.{2,}")]
+    [GeneratedRegex(@"\.{2,}", RegexOptions.None, 2000)]
     private static partial Regex RepeatedDotRx();
-    [GeneratedRegex(@"\s*далее\s+по\s+приложени", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\s*далее\s+по\s+приложени", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TailDaleePoRx();
-    [GeneratedRegex(@"\s*согласно\s+приложени", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\s*согласно\s+приложени", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TailSoglasnoRx();
-    [GeneratedRegex(@"\s*в\s+соответстви", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\s*в\s+соответстви", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TailVSootvetstviiRx();
-    [GeneratedRegex(@"\s*,?\s*\(\s*\d{2,3}[.,]\d{3,}°?\s*[,;]\s*\d{2,3}[.,]\d{3,}°?\s*\)\s*$")]
+    [GeneratedRegex(@"\s*,?\s*\(\s*\d{2,3}[.,]\d{3,}°?\s*[,;]\s*\d{2,3}[.,]\d{3,}°?\s*\)\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingBareCoordsRx();
-    [GeneratedRegex(@"\s*\(\s*(?:WGS[- ]?84:?\s*)?\d{1,3}[.,]\d{3,}.*$", RegexOptions.Singleline)]
+    [GeneratedRegex(@"\s*\(\s*(?:WGS[- ]?84:?\s*)?\d{1,3}[.,]\d{3,}.*$", RegexOptions.Singleline, 2000)]
     private static partial Regex MidStringCoordsRx();
     // ── Хвосты-координаты и огрызки в конце адреса (координаты уже лежат в поле coordinates) ──
     // «…с. Латоново (47°29'29.4"с.ш.; 38°40'6.2"в.д.)» — DMS в скобках, закрывающая может отсутствовать
-    [GeneratedRegex(@"\s*,?\s*\([^()]*\d{1,3}\s*°[^()]*\)?\s*$")]
+    [GeneratedRegex(@"\s*,?\s*\([^()]*\d{1,3}\s*°[^()]*\)?\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingDmsParenRx();
     // «…д. 285, 53°15'00.42" С.Ш., 50°15'18.86" В.Д» — DMS без скобок в конце (63-СЦ-04)
-    [GeneratedRegex(@"[,\s]+\d{1,3}\s*°\s*\d{1,2}[^\n]*$")]
+    [GeneratedRegex(@"[,\s]+\d{1,3}\s*°\s*\d{1,2}[^\n]*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingDmsBareRx();
     // «…мачта РТРС, 49.013731 с.ш. 131.070867 в.д» — десятичные координаты БЕЗ градуса
     // и без скобок, с текстовым направлением с.ш./в.д. в конце (79-01-02).
     // «;» в разделителе обязателен: в тюменской серии координаты отделены точкой с запятой —
     // «…ул. Малиновского, д. 6; 57,177917 с.ш., 65.646964 в.д.» (72-ОЦ-01).
-    [GeneratedRegex(@"[,;\s]+\d{2,3}[.,]\d{3,}\s*[°]?\s*с\.?\s*ш\.?[^\n]*?в\.?\s*д\.?\.?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,;\s]+\d{2,3}[.,]\d{3,}\s*[°]?\s*с\.?\s*ш\.?[^\n]*?в\.?\s*д\.?\.?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingDecDirRx();
     // Одиночное координатное число после «;» без указания направления:
     // «…ул. Юрия Семовских, д. 14; 57,099944» — хвост срезанных координат (72-ОЦ-01).
-    [GeneratedRegex(@";\s*\d{2,3}[.,]\d{4,}\s*(?:с\.?\s*ш\.?)?\s*,?\s*(?:\d{2,3}[.,]\d{1,})?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@";\s*\d{2,3}[.,]\d{4,}\s*(?:с\.?\s*ш\.?)?\s*,?\s*(?:\d{2,3}[.,]\d{1,})?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingSemicolonCoordRx();
     // «…столб 28м ЗАО "Русские Башни", с.ш. 59.857725 в.д. 30.218913» — направление
     // ПЕРЕД числом (с.ш. X в.д. Y), координаты в конце адреса (78-01-05).
-    [GeneratedRegex(@"[,;\s]+с\.?\s*ш\.?\s*\d{2,3}[.,]\d{3,}\s*в\.?\s*д\.?\s*\d{2,3}[.,]\d{3,}\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,;\s]+с\.?\s*ш\.?\s*\d{2,3}[.,]\d{3,}\s*в\.?\s*д\.?\s*\d{2,3}[.,]\d{3,}\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingDirDecRx();
     // Хвост «(коорд. …)»/«коорд. …» — со слова «координаты/коорд.», ЗА которым идут ЦИФРЫ
     // или скобка/двоеточие с цифрами (координаты уже в поле coordinates). Требование цифр
     // после слова не даёт задеть улицу «Координатная» (05-01-01, 16-11-10).
-    [GeneratedRegex(@"[,;\s]*\(?\s*(?:гео[-\s]?)?коорд(?:инаты|\.)?\s*[:№]?\s*[-\d(].*$", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    [GeneratedRegex(@"[,;\s]*\(?\s*(?:гео[-\s]?)?коорд(?:инаты|\.)?\s*[:№]?\s*[-\d(].*$", RegexOptions.IgnoreCase | RegexOptions.Singleline, 2000)]
     private static partial Regex TrailingKoordRx();
     // Координатный хвост с нестандартным градусом (°, «град.», «*»): начинается СРАЗУ с числа
     // координаты (разделитель + \d), поэтому НЕ захватывает адрес назад. Требуем направление
     // (с.ш./в.д./N/E) в пределах хвоста. «…(55град.30'55.2"С.Ш., 49град.…В.Д.)»,
     // «…, 56.4255° N, 37.7847° Е», «…; 51.751013°N, 36.221015°Е».
-    [GeneratedRegex(@"[,;(]\s*\(?\s*\d{1,3}[.,]?\d*\s*(?:°|град\.?|\*)[^,;()]{0,30}?(?:[СЮ]\.?\s*Ш|[NS])\b[^()]*?\)?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,;(]\s*\(?\s*\d{1,3}[.,]?\d*\s*(?:°|град\.?|\*)[^,;()]{0,30}?(?:[СЮ]\.?\s*Ш|[NS])\b[^()]*?\)?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingAnyDegRx();
     // Десятичная пара с латинским направлением N…E (с градусом ° или без): начинается с
     // разделителя+числа, НЕ захватывает адрес назад. «…СНТ "Каштан" 55.546218° N, 38.917368° E»,
     // «…67.826944N, 58.417778E», «…, 55.476925 N, 37.717784 Е» (кир. «Е» тоже).
-    [GeneratedRegex(@"[,;\s]+\d{2,3}[.,]\d{3,}\s*°?\s*N\s*[,;]?\s*\d{2,3}[.,]\d{3,}\s*°?\s*[EЕ]\.?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,;\s]+\d{2,3}[.,]\d{3,}\s*°?\s*N\s*[,;]?\s*\d{2,3}[.,]\d{3,}\s*°?\s*[EЕ]\.?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingLatNERx();
     // «…в/ч 23626, 55.542711, 36.926180» — голая пара десятичных координат в конце (77-МО-02)
-    [GeneratedRegex(@",\s*\d{2,3}\.\d{4,}\s*,\s*\d{2,3}\.\d{4,}\s*$")]
+    [GeneratedRegex(@",\s*\d{2,3}\.\d{4,}\s*,\s*\d{2,3}\.\d{4,}\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingDecPairRx();
     // «…в районе д. 4, 24:02:7101004» — кадастровый номер в конце (24-49-33)
-    [GeneratedRegex(@",?\s*\d{1,2}:\d{1,2}:\d{4,}[\d:]*\s*$")]
+    [GeneratedRegex(@",?\s*\d{1,2}:\d{1,2}:\d{4,}[\d:]*\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingCadastralRx();
     // «…участок 26 (кадастровый № отсутствует)» — скобка-примечание о кадастре: убираем
     // ТОЛЬКО скобку, номер участка «26» остаётся частью адреса (24-49-33).
-    [GeneratedRegex(@"\s*\((?:кадастров|земельн)[^()]*\)?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\s*\((?:кадастров|земельн)[^()]*\)?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingCadastralParenRx();
     // «…д. 32г, зу находится по кад. № 26:12:…» — обрывок «зу/земельный участок … по кад…»:
     // техническое примечание, а не адрес (26-01-05).
-    [GeneratedRegex(@",?\s*(?:зу|з/у|земельн\w*\s+участок)\b[^,]*?(?:кад\w*\.?\s*№?|кадастров\w*)[^,]*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@",?\s*(?:зу|з/у|земельн\w*\s+участок)\b[^,]*?(?:кад\w*\.?\s*№?|кадастров\w*)[^,]*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingCadastralWordsRx();
     // «…д. 29, номер кадастрового квартала» — сам номер уже срезан как «64:48:040404»,
     // остаётся висячая словесная часть; убираем и её (64-01-02).
-    [GeneratedRegex(@"[,;]\s*(?:номер\s+)?кадастров\w*(?:\s+\w+){0,3}\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,;]\s*(?:номер\s+)?кадастров\w*(?:\s+\w+){0,3}\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingCadastralPhraseRx();
     // «…корп 2 (» / «…от д. 32 (» / «…б/н (примерно» / «…(60 град» — огрызок незакрытой скобки
-    [GeneratedRegex(@"\s*\([^()]{0,20}$")]
+    [GeneratedRegex(@"\s*\([^()]{0,20}$", RegexOptions.None, 2000)]
     private static partial Regex TrailingParenStubRx();
     // Висячая аббревиатура владельца в конце без имени: захват адреса обрывается на
     // кавычке имени, оставляя «…ул. Костычева, АМС ПАО», «…дом. 2, столб, АО» (54-НС-07,
     // 15-01-09). Убираем сам обрывок владельца, а затем — оставшуюся без уточнения опору.
-    [GeneratedRegex(@"[,\s]+(?:ПАО|ОАО|АО|ООО|ЗАО|ИП|ФГУП|МУП|ГУП|НАО)\.?\s*$")]
+    [GeneratedRegex(@"[,\s]+(?:ПАО|ОАО|АО|ООО|ЗАО|ИП|ФГУП|МУП|ГУП|НАО)\.?\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingOwnerStubRx();
     // Опора без уточнения в самом конце («…ул. Костычева, АМС», «…, столб») — после
     // удаления висячего владельца она не несёт адресной информации.
     // Запятая ОБЯЗАТЕЛЬНА: опора как отдельный элемент («…ул. Костычева, АМС») —
     // обрывок, а вот словосочетание «металлическая антенная опора» рвать нельзя (23-КК-10).
-    [GeneratedRegex(@",\s*(?:АМС|столб|башня|мачта|опора|вышка)\.?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@",\s*(?:АМС|столб|башня|мачта|опора|вышка)\.?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingBareOporaRx();
     // Номер БС в начале адреса: «Базовая станция № SA0149 Сахалинская область…»,
     // «BTS-70-00477 Томская область…» — имя станции, а не часть адреса (65-С1-08, 70-ТС-07).
-    [GeneratedRegex(@"^\s*(?:[Бб]азовая\s+станция\s*)?№?\s*[A-ZА-ЯЁ]{2,4}[-\s]?\d[\w\-/]*\s*,?\s+(?=[А-ЯЁ])")]
+    [GeneratedRegex(@"^\s*(?:[Бб]азовая\s+станция\s*)?№?\s*[A-ZА-ЯЁ]{2,4}[-\s]?\d[\w\-/]*\s*,?\s+(?=[А-ЯЁ])", RegexOptions.None, 2000)]
     private static partial Regex LeadingStationNumberRx();
     // Номер БС в КОНЦЕ адреса: «…ул. Ялтинская, д. 66 БС № 39-01947» — идентификатор
     // станции приклеился к адресу без разделителя (39-КС-14).
-    [GeneratedRegex(@"[,\s]+(?:БС|BTS|б/с|[Бб]азовая\s+станция)\s*№?\s*[\w\-/.]{2,30}\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,\s]+(?:БС|BTS|б/с|[Бб]азовая\s+станция)\s*№?\s*[\w\-/.]{2,30}\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingStationNumberRx();
     // Обрывок «Гео»/«Географ…» в конце — начало срезанного «Географические координаты»
     // («…д. 1, АМС ПАО "МТС" Гео» → «…д. 1, АМС ПАО "МТС"»). Требуем пробел/запятую перед,
     // чтобы не задеть «Геологическую»/«Геодезическую» улицу (там слово не в конце после разделителя).
-    [GeneratedRegex(@"[\s,]+Гео(?:граф\w*)?\.?\s*$")]
+    [GeneratedRegex(@"[\s,]+Гео(?:граф\w*)?\.?\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingGeoStubRx();
     // Висячий предлог/уточнение без объекта в конце адреса: «…, вблизи», «…, антенна», «…, около».
     // \b ОБЯЗАТЕЛЕН: без него «на» съедало окончание слова — «ул. Гагарина» → «ул. Гагари»,
@@ -983,7 +983,7 @@ public static partial class AddressParser
     // «…, с» → убираем «, с»; «…, по координатам:» → «…, по»; 69-01-01, 50-99-02, 79-01-02).
     // Добавлены «в» и сокращения без названия («…, пер», «…, ул», «…, д») — остаются
     // обрывками, когда захват оборвался на середине элемента адреса (26-01-05, 52-НЦ-09).
-    [GeneratedRegex(@"(?:,|\s)\s*\b(?:вблизи|около|напротив|антенна|на\s+антенной|в\s+районе|на\s+расстоянии|между|на\s+жб|на|по|в|с(?:\s+техническими)?|пер|ул|д|дом|стр|корп|лит|зд)\.?\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:,|\s)\s*\b(?:вблизи|около|напротив|антенна|на\s+антенной|в\s+районе|на\s+расстоянии|между|на\s+жб|на|по|в|с(?:\s+техническими)?|пер|ул|д|дом|стр|корп|лит|зд)\.?\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DanglingPrepositionRx();
 
     // Однозначные сокращения республик в начале адреса → полная форма. В приложениях
@@ -992,19 +992,19 @@ public static partial class AddressParser
     // РИ=Ингушетия. РБ/РК/ЧР/РТ намеренно НЕ трогаем — у них по 2+ толкования.
     // Осмысленное продолжение после региона: слово из 3+ букв за первой запятой
     // («…область, Нейский район»), а не цифра-обрывок («…область, 1»).
-    [GeneratedRegex(@",\s*[^,]*?[А-Яа-яЁёA-Za-z]{3,}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@",\s*[^,]*?[А-Яа-яЁёA-Za-z]{3,}", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex MeaningfulTailRx();
 
     // Кандидат начинается со ссылки на разрешительный/договорный документ (обычно из
     // приложения) — это не адрес: «Разрешение Администрации…», «Договор аренды…».
-    [GeneratedRegex(@"^\s*(?:разрешени\w*|договор\w*|согласовани\w*|заключени\w*|письмо|приказ\w*|постановлени\w*|уведомлени\w*|акт\s)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*(?:разрешени\w*|договор\w*|согласовани\w*|заключени\w*|письмо|приказ\w*|постановлени\w*|уведомлени\w*|акт\s)", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex ReferenceDocStartRx();
 
-    [GeneratedRegex(@"^\s*РД\s*,", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*РД\s*,", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex RdPrefixRx();
-    [GeneratedRegex(@"^\s*КБР\s*,", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*КБР\s*,", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex KbrPrefixRx();
-    [GeneratedRegex(@"^\s*КЧР\s*,", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*КЧР\s*,", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex KchrPrefixRx();
 
     private static string ExpandRegionAbbr(string address)
@@ -1017,77 +1017,77 @@ public static partial class AddressParser
 
     // Префикс-имя станции перед адресом: «Базовая станция № <код>, », «БС 66039 "Имя", »,
     // разделителем бывает и точка: «Базовая станция № BTS-26-…. Ставропольский край» (26-01-05).
-    [GeneratedRegex(@"^(?:Базовая\s+станция|БС)\s+(?:\w+\s+связи\s+)?№?\s*[\w./-]+\s*(?:""[^""]{1,40}""\s*)?[.,]\s*", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?:Базовая\s+станция|БС)\s+(?:\w+\s+связи\s+)?№?\s*[\w./-]+\s*(?:""[^""]{1,40}""\s*)?[.,]\s*", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex StationPrefixRx();
 
     // Ведущий мусор из перечня стандартов: «ТТЕ-900, LTE-1800, … на территории
     // Ставропольского края. » перед настоящим адресом (26-01-05).
-    [GeneratedRegex(@"^[^\n]{0,40}?(?:LTE|GSM|UMTS|IMT|ТТЕ|DCS|NR)[^.\n]{0,160}\.\s*(?=[А-ЯЁ])", RegexOptions.None)]
+    [GeneratedRegex(@"^[^\n]{0,40}?(?:LTE|GSM|UMTS|IMT|ТТЕ|DCS|NR)[^.\n]{0,160}\.\s*(?=[А-ЯЁ])", RegexOptions.None, 2000)]
     private static partial Regex LeadStandardsRx();
 
     // Ведущий почтовый индекс перед адресом.
-    [GeneratedRegex(@"^\d{6}\s*,\s*")]
+    [GeneratedRegex(@"^\d{6}\s*,\s*", RegexOptions.None, 2000)]
     private static partial Regex PostalPrefixRx();
 
     // «…д. 10АБС ПАО "МТС"…» — «БС <юрлицо>» приклеился к номеру дома без пробела.
-    [GeneratedRegex(@"(?<=\d[А-Яа-я]?)БС\s+(?:ПАО|ООО|АО|ЗАО)\b.*$")]
+    [GeneratedRegex(@"(?<=\d[А-Яа-я]?)БС\s+(?:ПАО|ООО|АО|ЗАО)\b.*$", RegexOptions.None, 2000)]
     private static partial Regex GluedBsOwnerRx();
 
     // Огрызки, остающиеся в самом хвосте после срезов стоп-словами.
-    [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$|,?\s*в\s+границах\s*$|,\s*(?-i:[а-яё]{1,3})\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[,.;]\s*(?:з/у|РЭС|уч\.|стр\.)\s*$|,?\s*в\s+границах\s*$|,\s*(?-i:[а-яё]{1,3})\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingScrapRx();
 
     // Номер сноски/страницы, прилипший после точки в конце адреса из приложения:
     // «село Иваньково. 3», «башня; 5» (71-ТЦ-04, 72-ОЦ-01). Лукбехайнды защищают
     // настоящие номера домов («д. 3», «стр. 2», «корп. 1», «лит. 4»).
-    [GeneratedRegex(@"(?<!\bстр)(?<!\bкорп)(?<!\bдом)(?<!\bлит)(?<!\bсоор)(?<!\bпер)(?<!\bпркт)(?<!\bпрд)(?<!уч)(?<!\bвлд)(?<!\bмкр)(?<!\bнаб)(?<!\bкв)(?<!\bкаб)(?<!\bпом)(?<!помещ)(?<=[а-яё]{3})[.;]\s+\d{1,3}\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<!\bстр)(?<!\bкорп)(?<!\bдом)(?<!\bлит)(?<!\bсоор)(?<!\bпер)(?<!\bпркт)(?<!\bпрд)(?<!уч)(?<!\bвлд)(?<!\bмкр)(?<!\bнаб)(?<!\bкв)(?<!\bкаб)(?<!\bпом)(?<!помещ)(?<=[а-яё]{3})[.;]\s+\d{1,3}\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingPageNumRx();
 
     // Запятая, вклинившаяся после типа улицы ПЕРЕД именем: «г. Тула, ул., Щегловская
     // засека» (71-ТЦ-04). Требуем запятую и до типа (у типа нет имени слева) и заглавную
     // после — иначе портится обычное «Солнечный пер., д. 79».
-    [GeneratedRegex(@"(?<=,\s{0,3})\b(ул|пер|пр|прд|пркт|ш|наб|бр|пл|мкр)\.\s*,\s*(?=[А-ЯЁ][а-яё])", RegexOptions.None)]
+    [GeneratedRegex(@"(?<=,\s{0,3})\b(ул|пер|пр|прд|пркт|ш|наб|бр|пл|мкр)\.\s*,\s*(?=[А-ЯЁ][а-яё])", RegexOptions.None, 2000)]
     private static partial Regex StreetTypeCommaRx();
 
     // Обломок координат после точки с запятой: «д. 35; 5» ← «д. 35; 57°09'…» (72-ОЦ-01).
-    [GeneratedRegex(@"(?<=\d[а-яa-z]?)\s*;\s*\d{1,2}\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<=\d[а-яa-z]?)\s*;\s*\d{1,2}\s*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingSemiNumRx();
 
     // Задвоенный сегмент из исходника: «г. Челябинск, г. Челябинск» (74-50-03).
-    [GeneratedRegex(@"([^,;()]{3,40}?)\s*,\s*\1(?=\s*,|\s*$)")]
+    [GeneratedRegex(@"([^,;()]{3,40}?)\s*,\s*\1(?=\s*,|\s*$)", RegexOptions.None, 2000)]
     private static partial Regex DupSegmentRx();
 
     // Ведущее «[адрес] по договору» — кандидат целиком из договора аренды.
-    [GeneratedRegex(@"^\s*(?:адрес\s+)?по\s+договору\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*(?:адрес\s+)?по\s+договору\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex LeadDogovorRx();
 
     // Ведущий служебный префикс «фактический адрес размещения БС:» / «фактическое расположение».
-    [GeneratedRegex(@"^\s*фактическ\w*\s+(?:адрес\w*\s+размещени\w*(?:\s+БС)?|адрес[^:\n]{0,30}:|расположени\w*)\s*:?\s*", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*фактическ\w*\s+(?:адрес\w*\s+размещени\w*(?:\s+БС)?|адрес[^:\n]{0,30}:|расположени\w*)\s*:?\s*", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex LeadFactualRx();
 
     // Шифр проекта, прилипший к хвосту: «…Березовка". 4509.006.П.5/0.0003-СЗЗПРТ01"» (10-КЦ-01).
-    [GeneratedRegex(@"["".]*\s*\d{3,4}\.\d{3}\.П\.\S*\s*$")]
+    [GeneratedRegex(@"["".]*\s*\d{3,4}\.\d{3}\.П\.\S*\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingProjCodeRx();
 
     // Скобка договора аренды: «(по договору: …)» — адрес не места размещения (02-БЦ-01).
-    [GeneratedRegex(@"\s*\(\s*по\s+договору[^)]*\)\s*", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\s*\(\s*по\s+договору[^)]*\)\s*", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex DogovorParenRx();
 
     // Задвоенное начало региона: «ВолгогрВолгоградская область» — обрубок повторяет
     // первые буквы полного слова (34-12-01).
-    [GeneratedRegex(@"^(?<p>[А-ЯЁ][а-яё]{2})[а-яё]{0,10}(?=\k<p>)")]
+    [GeneratedRegex(@"^(?<p>[А-ЯЁ][а-яё]{2})[а-яё]{0,10}(?=\k<p>)", RegexOptions.None, 2000)]
     private static partial Regex LeadGluedDupRx();
 
     // Обрыв «Технические [характеристики]» лимитом захвата: «…фонды". Техничес» (34-12-01).
-    [GeneratedRegex(@"[.,]\s*Техничес\w{0,4}\s*$")]
+    [GeneratedRegex(@"[.,]\s*Техничес\w{0,4}\s*$", RegexOptions.None, 2000)]
     private static partial Regex TrailingTehnichesRx();
 
     // Кадастровая формула ЕГРН: «Установлено относительно ориентира <адрес>» (61-РЦ-06).
-    [GeneratedRegex(@"^установлено\s+относительно\s+ориентира[,:\s]*", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^установлено\s+относительно\s+ориентира[,:\s]*", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex LeadOrientirRx();
 
     // Хвост-координаты после кадастрового «к.»: «…ст. Кагальницкая, к. 46.889200 40.142100» (61-РЦ-06).
-    [GeneratedRegex(@",?\s*к\.\s*\d{2}[.,]\d{4,}[^\n]*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@",?\s*к\.\s*\d{2}[.,]\d{4,}[^\n]*$", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex TrailingKCoordsRx();
 
     public static string Clean(string address)
