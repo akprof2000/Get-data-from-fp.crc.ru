@@ -75,17 +75,11 @@ jobs:
           # Тонкие лаунчеры: запуск приложения из корня, рабочий каталог — корень.
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
             for p in $PROJECTS; do
-              printf '@echo off
-cd /d "%%~dp0"
-"%%~dp0bin\%s.exe" %%*
-' "$p" > "$out/$p.cmd"
+              printf '@echo off\r\ncd /d "%%~dp0"\r\n"%%~dp0bin\\%s.exe" %%*\r\n' "$p" > "$out/$p.cmd"
             done
           else
             for p in $PROJECTS; do
-              printf '#!/usr/bin/env bash
-cd "$(dirname "$0")"
-exec ./bin/%s "$@"
-' "$p" > "$out/$p.sh"
+              printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexec ./bin/%s "$@"\n' "$p" > "$out/$p.sh"
               chmod +x "$out/$p.sh"
             done
           fi
