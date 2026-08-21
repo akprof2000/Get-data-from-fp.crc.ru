@@ -8,7 +8,62 @@ $flag  = Join-Path $works ".pipeline-running"
 $page  = Join-Path $works "pipeline-status.html"
 New-Item -ItemType Directory -Force $works | Out-Null
 
-function CountFiles($p) { (Get-ChildItem (Join-Path $works $p) -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count }
+# Счёт файлов потоковым обходом: Get-ChildItem -Recurse строит объект на каждый
+# файл и на сотнях тысяч текстов считал минутами — страница переставала
+# обновляться и выглядела зависшей.
+function CountFiles($p) {
+    $full = Join-Path $works $p
+    if (-not (Test-Path $full)) { return 0 }
+    try {
+        $n = 0
+        foreach ($f in [System.IO.Directory]::EnumerateFiles($full, '*', [System.IO.SearchOption]::AllDirectories)) { $n++ }
+        return $n
+    } catch { return 0 }
+}
+
+# Тяжёлые счётчики пересчитываем не чаще раза в 15 секунд; сам кадр (время,
+# этап, годы) рисуется каждые 2 секунды и страница остаётся «живой».
+$script:countCache = $null
+$script:countStamp = [datetime]::MinValue
+function Get-Counts {
+    if ($script:countCache -and ((Get-Date) - $script:countStamp).TotalSeconds -lt 15) { return $script:countCache }
+    $script:countCache = @{
+        html  = CountFiles "output";     txt   = CountFiles "documents"
+        cells = CountFiles "cells";      other = CountFiles "other"
+        json  = CountFiles "OutputJson"; norm  = CountFiles "OutputNormalized"
+    }
+    $script:countStamp = Get-Date
+    return $script:countCache
+}
+
+$script:yearCache = $null
+$script:yearStamp = [datetime]::MinValue
+function Get-YearCounts {
+    if ($script:yearCache -and ((Get-Date) - $script:yearStamp).TotalSeconds -lt 15) { return $script:yearCache }
+    $txt = @{}; $html = @{}
+    $docs = Join-Path $works "documents"
+    if (Test-Path $docs) {
+        foreach ($dir in [System.IO.Directory]::EnumerateDirectories($docs)) {
+            $n = 0
+            foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, '*', [System.IO.SearchOption]::AllDirectories)) { $n++ }
+            $txt[[System.IO.Path]::GetFileName($dir)] = $n
+        }
+    }
+    $out = Join-Path $works "output"
+    if (Test-Path $out) {
+        foreach ($term in [System.IO.Directory]::EnumerateDirectories($out)) {
+            foreach ($yd in [System.IO.Directory]::EnumerateDirectories($term)) {
+                $n = 0
+                foreach ($f in [System.IO.Directory]::EnumerateFiles($yd, '*', [System.IO.SearchOption]::AllDirectories)) { $n++ }
+                $name = [System.IO.Path]::GetFileName($yd)
+                $html[$name] = [int]$html[$name] + $n
+            }
+        }
+    }
+    $script:yearCache = @{ Txt = $txt; Html = $html }
+    $script:yearStamp = Get-Date
+    return $script:yearCache
+}
 
 # Погодовой сбор: список лет периода + отметки о завершённых (works/.years-done)
 # и текущем (works/.year-current). При однолетнем периоде таблица не выводится.
@@ -45,20 +100,30 @@ while ($true) {
     # этого красным помечался бы первый этап, а не тот, на котором упало.
     if ($order -contains $last) { $lastReal = $last }
     $stage = $last
-    $c = @{
-        html  = CountFiles "output"
-        txt   = CountFiles "documents"
-        cells = CountFiles "cells"
-        json  = CountFiles "OutputJson"
-        norm  = CountFiles "OutputNormalized"
+    $c = Get-Counts
+    # Прогресс внутри длинных этапов: выход предыдущего этапа — это «всего»,
+    # выход текущего — «сделано». Иначе долгие этапы (ML на сотнях тысяч текстов)
+    # часами показывали безликое «идёт».
+    function Fmt($doneN, $totalN, $unit) {
+        if ($totalN -gt 0) {
+            $pct = [Math]::Min(100, [Math]::Floor(100 * $doneN / $totalN))
+            return @{ Text = ("{0:N0} / {1:N0} {2} ({3}%)" -f $doneN, $totalN, $unit, $pct); Pct = $pct }
+        }
+        return @{ Text = ("{0:N0} {1}" -f $doneN, $unit); Pct = -1 }
     }
+    $mlDone = $c.cells + $c.other
+    $fCollect   = Fmt $c.html 0 "HTML"
+    $fParse     = Fmt $c.txt ($c.txt + $c.html) "txt"
+    $fMl        = Fmt $mlDone $c.txt "текстов"
+    $fExtract   = Fmt $c.json $c.cells "JSON"
+    $fNormalize = Fmt $c.norm $c.json "готово"
     $rows = @(
-        @("1. Сбор с fp.crc.ru",          "collect",   "$($c.html) HTML"),
-        @("2. HTML → тексты",             "parse",     "$($c.txt) txt"),
-        @("3. ML-классификация",          "ml",        "$($c.cells) про БС"),
-        @("4. Извлечение в JSON",         "extract",   "$($c.json) JSON"),
-        @("5. Обновление базы ГАР+OSM",   "garupdate", "gar.sqlite"),
-        @("6. Нормализация адресов",      "normalize", "$($c.norm) готово")
+        @("1. Сбор с fp.crc.ru",          "collect",   $fCollect.Text,   $fCollect.Pct),
+        @("2. HTML → тексты",             "parse",     $fParse.Text,     $fParse.Pct),
+        @("3. ML-классификация",          "ml",        $fMl.Text,        $fMl.Pct),
+        @("4. Извлечение в JSON",         "extract",   $fExtract.Text,   $fExtract.Pct),
+        @("5. Обновление базы ГАР+OSM",   "garupdate", "gar.sqlite",     -1),
+        @("6. Нормализация адресов",      "normalize", $fNormalize.Text, $fNormalize.Pct)
     )
     $order = @("collect","parse","ml","extract","garupdate","normalize")
     $idx = if ($stage -eq "failed" -and $lastReal) { $order.IndexOf($lastReal) } else { $order.IndexOf($stage) }
@@ -69,7 +134,11 @@ while ($true) {
         if ($stage -eq "done")   { $st = "ok"; $stTxt = "готово"; $w = 100 }
         elseif ($i -lt $idx)     { $st = "ok"; $stTxt = "готово"; $w = 100 }
         elseif ($i -eq $idx -and $stage -eq "failed") { $st = "err"; $stTxt = "ошибка"; $w = 100 }
-        elseif ($i -eq $idx)     { $st = "run"; $stTxt = "идёт"; $w = 55 }
+        elseif ($i -eq $idx)     {
+            $st = "run"
+            $w = if ($r[3] -ge 0) { [int]$r[3] } else { 55 }
+            $stTxt = if ($r[3] -ge 0) { "идёт · $($r[3])%" } else { "идёт" }
+        }
         else                     { $st = "wait"; $stTxt = "ожидает"; $w = 0 }
         $body += "<tr><td>$($r[0])</td><td class='$st'>$stTxt</td>" +
                  "<td><div class='bar'><i class='$st' style='width:$w%'></i></div></td>" +
@@ -79,34 +148,54 @@ while ($true) {
     $plan = Get-YearPlan
     $yearsBlock = ""
     if ($plan) {
-        $txtByYear = @{}
-        foreach ($d in (Get-ChildItem (Join-Path $works "documents") -Directory -ErrorAction SilentlyContinue)) {
-            $txtByYear[$d.Name] = (Get-ChildItem $d.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
-        }
-        $htmlByYear = @{}
-        foreach ($term in (Get-ChildItem (Join-Path $works "output") -Directory -ErrorAction SilentlyContinue)) {
-            foreach ($y in (Get-ChildItem $term.FullName -Directory -ErrorAction SilentlyContinue)) {
-                $htmlByYear[$y.Name] = [int]$htmlByYear[$y.Name] + (Get-ChildItem $y.FullName -Recurse -File -ErrorAction SilentlyContinue).Count
-            }
-        }
+        $yc = Get-YearCounts
+        $txtByYear = $yc.Txt
+        $htmlByYear = $yc.Html
         $rowsY = ""
+        $rowsDone = ""
+        $doneCount = 0
         foreach ($y in $plan.Years) {
             $ys = "$y"
-            if ($stage -eq "done" -or ($plan.Done -contains $ys)) { $st = "ok"; $stTxt = "собран, HTML удалён"; $w = 100 }
+            # Год считаем собранным и по факту: есть тексты и не осталось HTML.
+            # Отметки снимаются после прохождения всего периода, и без этого
+            # готовые годы показывались бы как «ожидает».
+            $doneByFacts = ([int]$txtByYear[$ys] -gt 0 -and [int]$htmlByYear[$ys] -eq 0)
+            if ($doneByFacts -or $stage -eq "done" -or ($plan.Done -contains $ys)) { $doneCount++ }
+            if ($stage -eq "done" -or ($plan.Done -contains $ys) -or $doneByFacts) { $st = "ok"; $stTxt = "собран, HTML удалён"; $w = 100 }
             elseif ($plan.Current -eq $ys)     { $st = "run";  $stTxt = "в работе";            $w = 55 }
             else                               { $st = "wait"; $stTxt = "ожидает";             $w = 0 }
             $htmlNow = [int]$htmlByYear[$ys]
             $txtNow  = [int]$txtByYear[$ys]
-            $rowsY += "<tr><td>$ys</td><td class='$st'>$stTxt</td>" +
-                      "<td><div class='bar'><i class='$st' style='width:$w%'></i></div></td>" +
-                      "<td class='num'>$htmlNow HTML · $txtNow txt</td></tr>`n"
+            $rowHtml = "<tr><td>$ys</td><td class='$st'>$stTxt</td>" +
+                       "<td><div class='bar'><i class='$st' style='width:$w%'></i></div></td>" +
+                       "<td class='num'>$htmlNow HTML · $txtNow txt</td></tr>`n"
+            # Завершённые годы прячем в сворачиваемый блок: при периоде в 17 лет
+            # готовые строки вытесняли со экрана то, что реально в работе.
+            if ($st -eq "ok") { $rowsDone += $rowHtml } else { $rowsY += $rowHtml }
         }
-        $left = if ($stage -eq "done") { 0 } else { ($plan.Years | Where-Object { $plan.Done -notcontains "$_" }).Count }
+        $left = if ($stage -eq "done") { 0 } else {
+            ($plan.Years | Where-Object {
+                $ys2 = "$_"
+                ($plan.Done -notcontains $ys2) -and -not ([int]$txtByYear[$ys2] -gt 0 -and [int]$htmlByYear[$ys2] -eq 0)
+            }).Count
+        }
+        $head = "<tr><th>Год</th><th>Статус</th><th style=`"width:170px`">Прогресс</th><th>Счётчики</th></tr>"
+        $activeTable = if ($rowsY) { "<table>$head`n$rowsY</table>" } else { "<p class=`"note`" style=`"margin:0`">Активных годов нет — весь период собран.</p>" }
+        $doneBlock = ""
+        if ($rowsDone) {
+            $doneBlock = @"
+<details class="folded">
+<summary>Собранные годы: $doneCount — развернуть</summary>
+<table>$head
+$rowsDone</table>
+</details>
+"@
+        }
         $yearsBlock = @"
-<h2 style="font-size:19px;margin:26px 0 6px">Годы периода ($($plan.From) — $($plan.To))</h2>
+<h2>Годы периода ($($plan.From) — $($plan.To))</h2>
 <p class="note" style="margin:0 0 10px">Осталось обработать лет: <b>$left</b> из $($plan.Years.Count). HTML каждого года удаляется сразу после разбора в тексты; тексты накапливаются.</p>
-<table><tr><th>Год</th><th>Статус</th><th style="width:170px">Прогресс</th><th>Счётчики</th></tr>
-$rowsY</table>
+$activeTable
+$doneBlock
 "@
     }
 
@@ -136,6 +225,13 @@ td.num{font-family:monospace;white-space:nowrap}
 .bar i.err{background:#b3261e}
 @keyframes p{from{opacity:.45}to{opacity:1}}
 .note{color:#6b7a86;font-size:14px;margin-top:14px}
+h2{font-size:19px;margin:26px 0 6px}
+details.folded{margin-top:12px}
+details.folded>summary{cursor:pointer;padding:8px 12px;background:#fff;border:1px solid #dfe3e0;border-radius:6px;font-weight:700;color:#1a8a4a;list-style:none}
+details.folded>summary::-webkit-details-marker{display:none}
+details.folded>summary::before{content:"▸ ";color:#6b7a86}
+details.folded[open]>summary::before{content:"▾ "}
+details.folded>table{margin-top:8px}
 </style></head><body><div class="wrap">
 <h1>$title</h1>
 <span class="stamp">обновлено $stamp — $sub</span>
