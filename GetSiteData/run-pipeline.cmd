@@ -50,14 +50,14 @@ if not "%RC%"=="0" goto :fail_collect
 echo.
 echo [3/6] Классификация: базовые станции / прочее...
 >"%~dp0works\.pipeline-running" echo ml
-"%~dp0MLTextToData.exe" process
+"%~dp0bin\MLTextToData.exe" process
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_ml
 
 echo.
 echo [4/6] Извлечение данных в JSON...
 >"%~dp0works\.pipeline-running" echo extract
-"%~dp0ParseTextHeader.exe"
+"%~dp0bin\ParseTextHeader.exe"
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_extract
 
@@ -67,14 +67,14 @@ rem этап пропускается без ошибки, конвейер пр
 echo.
 echo [5/6] Обновление базы ГАР+OSM (при необходимости)...
 >"%~dp0works\.pipeline-running" echo garupdate
-"%~dp0NormalizeAddress.exe" update
+"%~dp0bin\NormalizeAddress.exe" update
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_garupdate
 
 echo.
 echo [6/6] Нормализация адресов по ГАР...
 >"%~dp0works\.pipeline-running" echo normalize
-"%~dp0NormalizeAddress.exe" normalize
+"%~dp0bin\NormalizeAddress.exe" normalize
 set RC=%errorlevel%
 if not "%RC%"=="0" goto :fail_normalize
 

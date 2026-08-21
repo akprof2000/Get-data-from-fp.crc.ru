@@ -15,7 +15,7 @@ using Microsoft.Extensions.Configuration;
 // Файл ищем рядом с исполняемым файлом: приложения конвейера лежат в одном каталоге
 // и запускаются из произвольного рабочего каталога.
 var fullConfig = new ConfigurationBuilder()
-    .SetBasePath(AppContext.BaseDirectory)
+    .SetBasePath(AppPaths.Root)
     .AddJsonFile("appsettings.json", optional: false)
     .AddEnvironmentVariables()
     .AddCommandLine(args)

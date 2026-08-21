@@ -352,7 +352,7 @@ internal partial class Program
         // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «GetSiteData»;
         // общий корень рабочих данных (WorkRoot) лежит на верхнем уровне файла.
         var fullConfig = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
+            .SetBasePath(AppPaths.Root)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
             .Build();

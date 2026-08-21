@@ -13,6 +13,9 @@ public partial class Program
     private static string InputBasePath = "Documents";
     private static string OutputJsonPath = "OutputJson";
     private static string OutputErrorsPath = "OutputErrors";
+
+    /// <summary>Куда складывать исходники, на которых разбор упал (для разбора причин).</summary>
+    private static string FailedPath = "Failed";
     // Имя лог-файла в каждом подкаталоге OutputJson
     private const string ProcessedLogFileName = "_processed.json";
 
@@ -21,7 +24,7 @@ public partial class Program
     /// неудачный паттерн уводил поток в катастрофический бэктрекинг: процесс
     /// часами жёг ядро и не двигался.
     /// </summary>
-    internal static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(20);
     private static int MaxParallelism = Environment.ProcessorCount;
     private static int LinesToRead = 12;
 
@@ -71,9 +74,18 @@ public partial class Program
 
     // ── Entry point ────────────────────────────────────────────────────
 
-    public static async Task Main()
+    public static async Task Main(string[] args)
     {
         LoadConfiguration();
+
+        // Режим диагностики: ParseTextHeader.exe --diag <файл или каталог>
+        // Прогоняет адресные шаблоны по каждому файлу отдельно и печатает время
+        // каждого — так виден шаблон с катастрофическим бэктрекингом.
+        if (args.Length >= 2 && args[0] == "--diag")
+        {
+            RunDiagnostics(args[1]);
+            return;
+        }
 
         Log.Phase("Старт парсера документов");
         Log.Info($"Входная директория : {InputBasePath}");
@@ -104,9 +116,18 @@ public partial class Program
             .ToList();
 
         Log.Info($"Найдено файлов    : {allFiles.Count}");
-        Log.Info($"Уже обработано    : {_processedByDir.Values.Sum(s => s.Count)}");
 
-        var toProcess = allFiles.Where(f => !IsAlreadyProcessed(f)).ToList();
+        // Файлы из works/Failed пробуем снова: чаще всего это ложный таймаут
+        // шаблона под нагрузкой, а не свойство самого документа.
+        var retry = CollectFailedForRetry();
+        if (retry.Count > 0)
+            Log.Info($"Повтор из Failed  : {retry.Count}");
+
+        var toProcess = allFiles.Where(f => !IsAlreadyProcessed(f) || retry.Contains(GetRelativePath(f.FullName))).ToList();
+        // Считаем по факту (готовый JSON на диске + журналы), а не только по
+        // журналам: после чистки выходной папки счётчик показывал 0, хотя
+        // результаты были на месте.
+        Log.Info($"Уже обработано    : {allFiles.Count - toProcess.Count}");
         Log.Info($"К обработке       : {toProcess.Count}");
 
         if (toProcess.Count == 0) { Log.Info("Новых файлов нет."); return; }
@@ -154,12 +175,75 @@ public partial class Program
 
     // ── Configuration ──────────────────────────────────────────────────
 
+    /// <summary>Режим --diag: ищет адресные шаблоны, которые «зависают» на файлах.</summary>
+    private static void RunDiagnostics(string path)
+    {
+        var files = Directory.Exists(path)
+            ? Directory.EnumerateFiles(path, "*.txt", SearchOption.AllDirectories)
+                .Where(f => !f.EndsWith(".reason.txt", StringComparison.OrdinalIgnoreCase)).ToList()
+            : [path];
+
+        Log.Phase($"Диагностика адресных шаблонов: файлов {files.Count}");
+        var worst = new Dictionary<int, (string Pattern, long Ms, int Hits, string File)>();
+
+        foreach (var file in files)
+        {
+            var text = File.ReadAllText(file);
+            Log.Info($"— {Path.GetFileName(file)} ({text.Length:N0} симв.)");
+
+            // Реальный путь разбора адреса целиком: сам по себе шаблон может быть
+            // быстрым, а зависать связка внутри TryPatterns (обрезка префикса и
+            // стоп-слов на каждом совпадении).
+            var lines = text.Split('\n').Take(LinesToRead).Select(l => l.TrimEnd('\r')).ToList();
+            var swAll = System.Diagnostics.Stopwatch.StartNew();
+            // Пока Extract работает, раз в 5 секунд печатаем счётчики: если разбор
+            // «висит», сразу видно, растут ли вызовы (лавина) или стоят на месте
+            // (настоящий бэктрекинг внутри одного шаблона).
+            using var ticker = new System.Threading.Timer(_ =>
+                Log.Warn($"    …{swAll.Elapsed.TotalSeconds:N0} c: шаблон #{AddressParser.CurrentPattern}, "
+                       + $"совпадений {System.Threading.Interlocked.Read(ref AddressParser.CallsMatch):N0}, "
+                       + $"проверок адреса {System.Threading.Interlocked.Read(ref AddressParser.CallsValidate):N0}, "
+                       + $"обрезок {System.Threading.Interlocked.Read(ref AddressParser.CallsTrim):N0}"),
+                null, 5000, 5000);
+            string? addr = null;
+            string outcome = "ок";
+            try { addr = AddressParser.Extract(text, lines); }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException rex)
+            { outcome = $"ТАЙМАУТ шаблона: {rex.Pattern}"; }
+            swAll.Stop();
+            Log.Info($"  AddressParser.Extract: {swAll.ElapsedMilliseconds:N0} мс — {outcome}"
+                   + (addr is null ? "" : $" → {addr}"));
+
+            foreach (var (index, pattern, ms, timedOut) in AddressParser.Diagnose(text))
+            {
+                if (ms < 200 && !timedOut) continue;
+                Log.Warn($"  шаблон #{index}: {ms:N0} мс{(timedOut ? " (ТАЙМАУТ)" : "")}");
+                if (!worst.TryGetValue(index, out var prev) || ms > prev.Ms)
+                    worst[index] = (pattern, ms, prev.Hits + 1, Path.GetFileName(file));
+                else
+                    worst[index] = (prev.Pattern, prev.Ms, prev.Hits + 1, prev.File);
+            }
+        }
+
+        Log.Phase("Итог: медленные шаблоны");
+        if (worst.Count == 0)
+        {
+            Log.Ok("Ни один шаблон не превысил 200 мс.");
+            return;
+        }
+        foreach (var kv in worst.OrderByDescending(k => k.Value.Ms))
+        {
+            Log.Warn($"#{kv.Key}  макс {kv.Value.Ms:N0} мс  на {kv.Value.Hits} файл(ах)  худший: {kv.Value.File}");
+            Log.Info($"    {kv.Value.Pattern}");
+        }
+    }
+
     private static void LoadConfiguration()
     {
         // Единый appsettings.json на весь конвейер — читаем СВОЮ секцию «ParseTextHeader»;
         // общий корень рабочих данных (WorkRoot) лежит на верхнем уровне файла.
         var fullConfig = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
+            .SetBasePath(AppPaths.Root)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddUserSecrets(typeof(Program).Assembly, optional: true)
             .AddEnvironmentVariables()
@@ -170,6 +254,7 @@ public partial class Program
         InputBasePath = WorkDir.Resolve(workRoot, config["InputBasePath"] ?? InputBasePath);
         OutputJsonPath = WorkDir.Resolve(workRoot, config["OutputJsonPath"] ?? OutputJsonPath);
         OutputErrorsPath = WorkDir.Resolve(workRoot, config["OutputErrorsPath"] ?? OutputErrorsPath);
+        FailedPath = WorkDir.Resolve(workRoot, config["FailedPath"] ?? FailedPath);
 
         if (int.TryParse(config["Processing:MaxParallelism"], out var mp) && mp > 0)
             MaxParallelism = mp;
@@ -199,19 +284,19 @@ public partial class Program
     // Регулярная опечатка «стация»/«стации» вместо «станция»/«станции» — встречается массово в
     // одной серии документов (31-БО-16, Белгородская область). Ограничиваем контекстом «базов...»,
     // чтобы не задеть настоящее слово «стация» (биотоп/место обитания) в других текстах.
-    [GeneratedRegex(@"(?<=[Бб]азов\w{0,3}\s)стаци(?=[ийя]\b)", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"(?<=[Бб]азов\w{0,3}\s)стаци(?=[ийя]\b)", RegexOptions.None, 20000)]
     private static partial Regex StaciaTypoRx();
 
     private static string NormalizeKnownTypos(string text) =>
         StaciaTypoRx().Replace(text, "станци");
 
     // Первая строка документа — числовой порядковый номер записи.
-    [GeneratedRegex(@"^(\d+)\b", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"^(\d+)\b", RegexOptions.None, 20000)]
     private static partial Regex IndexLineRx();
 
     // «NN.XX.NN.NNN.Т.NNNNNN.NN.NN от DD.MM.YYYY» — номер заключения и дата;
     // XX — 2-4 символа (буквы, цифры, русские буквы: РЦ, БЦ, НС, 01, 99 и т.д.)
-    [GeneratedRegex(@"\d{2}\.[А-ЯЁA-Zа-яёa-z0-9]{2,4}\.\d{2}\.\d{3}\.[ТTТт]\.\d{6}\.\d{2}\.\d{2}\s+от\s+\d{2}\.\d{2}\.\d{4}", RegexOptions.IgnoreCase, 2000)]
+    [GeneratedRegex(@"\d{2}\.[А-ЯЁA-Zа-яёa-z0-9]{2,4}\.\d{2}\.\d{3}\.[ТTТт]\.\d{6}\.\d{2}\.\d{2}\s+от\s+\d{2}\.\d{2}\.\d{4}", RegexOptions.IgnoreCase, 20000)]
     private static partial Regex DocNumberAndDateRx();
 
     private static async Task<ProcessingResult> ProcessFileAsync(FileInfo fileInfo)
@@ -240,6 +325,9 @@ public partial class Program
 
         if (firstLines.Count == 0)
         {
+            // Отмечаем обработанным: без этого пустые файлы (а их тысячи) заново
+            // перечитывались при каждом запуске — «уже обработанные» не видны.
+            MarkProcessed(subDir, fileInfo.Name);
             Log.Skip($"Пустой файл: {relativePath}");
             return ProcessingResult.Skipped;
         }
@@ -250,7 +338,21 @@ public partial class Program
         // по ключевым словам дублировала классификатор и ошибочно отбрасывала
         // реальные документы с редкими формулировками («Проект модернизации
         // БС № 76-00109…», «условия размещения РЭС ПАО "МТС" БС № BTS-…»).
-        var document = await ParseDocumentAsync(firstLines, fullText, fileInfo.Name, relativePath);
+        BaseStationDocument document;
+        try
+        {
+            document = await ParseDocumentAsync(firstLines, fullText, fileInfo.Name, relativePath);
+        }
+        catch (Exception ex)
+        {
+            // Сюда попадают в том числе RegexMatchTimeoutException: документ с
+            // разметкой, на которой шаблон уходит в долгий перебор. Такой файл
+            // кладём в works/Failed — чтобы потом разобрать причину — и помечаем
+            // обработанным, иначе он тормозил бы каждый следующий прогон.
+            SaveFailedCopy(fileInfo, relativePath, ex);
+            MarkProcessed(subDir, fileInfo.Name);
+            return ProcessingResult.Error;
+        }
         var hasAll = document.HasAllRequiredFields();
 
         var jsonRelPath = Path.ChangeExtension(relativePath, ".json");
@@ -745,20 +847,20 @@ public partial class Program
     // Постобработка захваченного значения номера (не зависят от содержимого документа — можно
     // предкомпилировать раз и навсегда, в отличие от контекстных проверок ниже, где паттерн
     // строится из значения текущего кандидата и потому не может быть статическим).
-    [GeneratedRegex(@"(\d)\s+-\s*(\d)", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"(\d)\s+-\s*(\d)", RegexOptions.None, 20000)]
     private static partial Regex InnerSpaceDashRx();
-    [GeneratedRegex(@"-\s+(\d)", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"-\s+(\d)", RegexOptions.None, 20000)]
     private static partial Regex DashSpaceDigitRx();
-    [GeneratedRegex(@"^\d+\.\d{2,5}$", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"^\d+\.\d{2,5}$", RegexOptions.None, 20000)]
     private static partial Regex DotNumericFormatRx();
     // Две ЛЮБЫЕ буквы подряд (не только заглавные): «86 ст. Москва-Пассажирская-Курская»
     // содержит точку, но не содержит двух заглавных подряд — с прежним [A-ZА-ЯЁ]{2} такое
     // значение отбрасывалось фильтром точек как «число-техпараметр» (77-ОМ-04).
-    [GeneratedRegex(@"[A-Za-zА-ЯЁа-яё]{2}", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"[A-Za-zА-ЯЁа-яё]{2}", RegexOptions.None, 20000)]
     private static partial Regex TwoLettersRx();
-    [GeneratedRegex(@"^\d{1,2}$", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"^\d{1,2}$", RegexOptions.None, 20000)]
     private static partial Regex OneOrTwoDigitsRx();
-    [GeneratedRegex(@"^\d{4}$", RegexOptions.None, 2000)]
+    [GeneratedRegex(@"^\d{4}$", RegexOptions.None, 20000)]
     private static partial Regex FourDigitsRx();
 
     private static string? TryExtractBsNumber(string text)
@@ -855,6 +957,57 @@ public partial class Program
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Копирует исходный текст, на котором разбор упал (чаще всего — таймаут
+    /// регулярного выражения), в works/Failed с той же раскладкой по годам,
+    /// рядом кладёт «.reason.txt» с описанием ошибки.
+    /// </summary>
+    private static void SaveFailedCopy(FileInfo fileInfo, string relativePath, Exception ex)
+    {
+        try
+        {
+            var dest = Path.Combine(FailedPath, relativePath);
+            EnsureDir(dest);
+            File.Copy(fileInfo.FullName, dest, overwrite: true);
+            // У таймаута регулярки есть сам шаблон — записываем его, иначе искать
+            // виновника среди трёх сотен паттернов приходится вручную.
+            var pattern = ex is System.Text.RegularExpressions.RegexMatchTimeoutException rex
+                ? $"{Environment.NewLine}Шаблон: {rex.Pattern}"
+                : string.Empty;
+            File.WriteAllText(Path.ChangeExtension(dest, ".reason.txt"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}{ex.GetType().Name}: {ex.Message}{pattern}{Environment.NewLine}");
+            Log.Warn($"Разбор не удался, копия в Failed: {relativePath} ({ex.GetType().Name})");
+        }
+        catch (Exception copyEx)
+        {
+            Log.Warn($"Не удалось сохранить копию {relativePath}: {copyEx.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Список относительных путей из works/Failed: их снимаем с учёта, а саму
+    /// папку очищаем — если разбор снова упадёт, файлы попадут туда заново.
+    /// </summary>
+    private static HashSet<string> CollectFailedForRetry()
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(FailedPath)) return result;
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(FailedPath, "*.txt", SearchOption.AllDirectories))
+            {
+                if (f.EndsWith(".reason.txt", StringComparison.OrdinalIgnoreCase)) continue;
+                result.Add(Path.GetRelativePath(FailedPath, f));
+            }
+            Directory.Delete(FailedPath, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Не удалось подготовить повтор Failed: {ex.Message}");
+        }
+        return result;
     }
 
     private static string GetRelativePath(string fullPath)

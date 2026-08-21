@@ -23,23 +23,38 @@ function CountFiles($p) {
 
 # Тяжёлые счётчики пересчитываем не чаще раза в 15 секунд; сам кадр (время,
 # этап, годы) рисуется каждые 2 секунды и страница остаётся «живой».
-$script:countCache = $null
-$script:countStamp = [datetime]::MinValue
+# Пересчёт ведём по ОДНОМУ каталогу за проход: на корпусе в сотни тысяч
+# документов полный обход всех папок занимал минуты, и страница застывала —
+# казалось, что статус неверный. Теперь кадр рисуется сразу, а цифры
+# подтягиваются по кругу.
+$script:counts = @{ html = 0; txt = 0; cells = 0; other = 0; json = 0; norm = 0 }
+$script:countKeys = @(
+    @{ Key = "json";  Dir = "OutputJson" },
+    @{ Key = "cells"; Dir = "cells" },
+    @{ Key = "other"; Dir = "other" },
+    @{ Key = "txt";   Dir = "documents" },
+    @{ Key = "html";  Dir = "output" },
+    @{ Key = "norm";  Dir = "OutputNormalized" }
+)
+$script:countIdx = 0
+$script:countsReady = $false
 function Get-Counts {
-    if ($script:countCache -and ((Get-Date) - $script:countStamp).TotalSeconds -lt 15) { return $script:countCache }
-    $script:countCache = @{
-        html  = CountFiles "output";     txt   = CountFiles "documents"
-        cells = CountFiles "cells";      other = CountFiles "other"
-        json  = CountFiles "OutputJson"; norm  = CountFiles "OutputNormalized"
+    if (-not $script:countsReady) {
+        # Первый кадр: считаем всё сразу, чтобы страница не открылась с нулями.
+        foreach ($e in $script:countKeys) { $script:counts[$e.Key] = CountFiles $e.Dir }
+        $script:countsReady = $true
+        return $script:counts
     }
-    $script:countStamp = Get-Date
-    return $script:countCache
+    $e = $script:countKeys[$script:countIdx % $script:countKeys.Count]
+    $script:countIdx++
+    $script:counts[$e.Key] = CountFiles $e.Dir
+    return $script:counts
 }
 
 $script:yearCache = $null
 $script:yearStamp = [datetime]::MinValue
 function Get-YearCounts {
-    if ($script:yearCache -and ((Get-Date) - $script:yearStamp).TotalSeconds -lt 15) { return $script:yearCache }
+    if ($script:yearCache -and ((Get-Date) - $script:yearStamp).TotalSeconds -lt 60) { return $script:yearCache }
     $txt = @{}; $html = @{}
     $docs = Join-Path $works "documents"
     if (Test-Path $docs) {
@@ -89,6 +104,60 @@ function Get-YearPlan {
     } catch { return $null }
 }
 
+# Момент начала прогона храним в файле: писатель статуса могли перезапустить,
+# а «прошло с начала» должно считаться от старта КОНВЕЙЕРА, а не от старта окна.
+# Файл заводится при первом кадре и снимается вместе с флагом .pipeline-running.
+$startFile = Join-Path $works ".pipeline-started"
+if (Test-Path $flag) {
+    if (-not (Test-Path $startFile)) {
+        [System.IO.File]::WriteAllText($startFile, (Get-Date).ToString("o"), (New-Object System.Text.UTF8Encoding($false)))
+    }
+} elseif (Test-Path $startFile) {
+    Remove-Item $startFile -Force -ErrorAction SilentlyContinue
+}
+# Разбор строго инвариантный: на русской локали [datetime]::Parse не принимает
+# формат "o", отметка терялась и «прошло с начала» сбрасывалось в ноль.
+$script:startedAt = Get-Date
+try {
+    $raw = (Get-Content $startFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($raw) {
+        $script:startedAt = [datetime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture,
+                                              [System.Globalization.DateTimeStyles]::RoundtripKind)
+    }
+} catch { }
+
+# История «сделано» по текущему этапу для оценки остатка: скорость берём по
+# скользящему окну (последние ~5 минут), иначе оценка скачет на паузах.
+$script:rateHist = @()
+
+function Fmt-Span([double]$seconds) {
+    if ($seconds -lt 0) { return "—" }
+    $ts = [TimeSpan]::FromSeconds([Math]::Round($seconds))
+    if ($ts.TotalDays -ge 1) { return ("{0}д {1:00}ч {2:00}м" -f [int]$ts.TotalDays, $ts.Hours, $ts.Minutes) }
+    if ($ts.TotalHours -ge 1) { return ("{0}ч {1:00}м" -f [int]$ts.TotalHours, $ts.Minutes) }
+    if ($ts.TotalMinutes -ge 1) { return ("{0}м {1:00}с" -f [int]$ts.TotalMinutes, $ts.Seconds) }
+    return ("{0}с" -f [int]$ts.TotalSeconds)
+}
+
+# Оценка остатка по фактической скорости текущего этапа. Возвращает готовую
+# строку: пока точек мало или прогресс стоит — честное «оценка накапливается»,
+# а не выдуманное число.
+function Get-Eta($doneN, $totalN, $stageName) {
+    if ($totalN -le 0 -or $doneN -ge $totalN) { return "—" }
+    $now = Get-Date
+    $script:rateHist += ,([pscustomobject]@{ T = $now; Done = [double]$doneN; Stage = $stageName })
+    # Смена этапа обнуляет историю: счётчики разных этапов несопоставимы.
+    $script:rateHist = @($script:rateHist | Where-Object { $_.Stage -eq $stageName -and ($now - $_.T).TotalSeconds -le 300 })
+    if ($script:rateHist.Count -lt 2) { return "оценка накапливается" }
+    $first = $script:rateHist[0]
+    $span = ($now - $first.T).TotalSeconds
+    $delta = [double]$doneN - $first.Done
+    if ($span -lt 20 -or $delta -le 0) { return "оценка накапливается" }
+    $rate = $delta / $span
+    return (Fmt-Span (($totalN - $doneN) / $rate))
+}
+
+$order = @("collect","parse","ml","extract","garupdate","normalize")
 $last = "collect"
 $lastReal = "collect"
 while ($true) {
@@ -125,7 +194,20 @@ while ($true) {
         @("5. Обновление базы ГАР+OSM",   "garupdate", "gar.sqlite",     -1),
         @("6. Нормализация адресов",      "normalize", $fNormalize.Text, $fNormalize.Pct)
     )
-    $order = @("collect","parse","ml","extract","garupdate","normalize")
+    # Два счётчика времени: сколько идёт прогон и сколько осталось по скорости
+    # ТЕКУЩЕГО этапа (остальные этапы предсказать нельзя — объём заранее неизвестен).
+    $elapsedTxt = Fmt-Span ((Get-Date) - $script:startedAt).TotalSeconds
+    $etaPair = switch ($stage) {
+        "parse"     { @($c.txt,   ($c.txt + $c.html)) }
+        "ml"        { @($mlDone,  $c.txt) }
+        "extract"   { @($c.json,  $c.cells) }
+        "normalize" { @($c.norm,  $c.json) }
+        default     { @(0, 0) }
+    }
+    $etaTxt = if ($stage -eq "done") { "завершено" }
+              elseif ($stage -eq "failed") { "—" }
+              else { Get-Eta $etaPair[0] $etaPair[1] $stage }
+
     $idx = if ($stage -eq "failed" -and $lastReal) { $order.IndexOf($lastReal) } else { $order.IndexOf($stage) }
     if ($idx -lt 0) { $idx = 0 }
     $body = ""
@@ -225,6 +307,10 @@ td.num{font-family:monospace;white-space:nowrap}
 .bar i.err{background:#b3261e}
 @keyframes p{from{opacity:.45}to{opacity:1}}
 .note{color:#6b7a86;font-size:14px;margin-top:14px}
+.times{display:flex;gap:12px;margin:14px 0 4px;flex-wrap:wrap}
+.tcard{flex:1 1 200px;background:#fff;border:1px solid #dfe3e0;border-radius:6px;padding:10px 14px}
+.tlabel{display:block;color:#6b7a86;font-size:13px}
+.tval{display:block;font-size:22px;font-weight:700;color:#1a3d2f;margin-top:2px;font-variant-numeric:tabular-nums}
 h2{font-size:19px;margin:26px 0 6px}
 details.folded{margin-top:12px}
 details.folded>summary{cursor:pointer;padding:8px 12px;background:#fff;border:1px solid #dfe3e0;border-radius:6px;font-weight:700;color:#1a8a4a;list-style:none}
@@ -235,6 +321,10 @@ details.folded>table{margin-top:8px}
 </style></head><body><div class="wrap">
 <h1>$title</h1>
 <span class="stamp">обновлено $stamp — $sub</span>
+<div class="times">
+  <div class="tcard"><span class="tlabel">Прошло с начала</span><span class="tval">$elapsedTxt</span></div>
+  <div class="tcard"><span class="tlabel">Осталось (оценка)</span><span class="tval">$etaTxt</span></div>
+</div>
 <table><tr><th>Этап</th><th>Статус</th><th style="width:170px">Прогресс</th><th>Счётчики</th></tr>
 $body</table>
 $yearsBlock

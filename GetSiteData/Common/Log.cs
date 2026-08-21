@@ -22,7 +22,7 @@ public static class Log
     {
         // Каждый запуск начинается с чистой папки логов (файлы, занятые другим
         // работающим процессом конвейера, пропускаем молча).
-        var logsDir = Path.Combine(AppContext.BaseDirectory, "logs");
+        var logsDir = Path.Combine(AppPaths.Root, "logs");
         try
         {
             if (Directory.Exists(logsDir))
@@ -36,7 +36,7 @@ public static class Log
         catch { /* очистка не должна мешать запуску */ }
 
         var nlogSection = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
+            .SetBasePath(AppPaths.Root)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .Build()
             .GetSection("NLog");

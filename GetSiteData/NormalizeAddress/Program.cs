@@ -21,7 +21,7 @@ public class Program
     // По умолчанию база живёт в data/ рядом с приложением — как модель классификатора:
     // это долгоживущий справочник, а не рабочие данные прогона, и чистка works
     // не должна его уносить (пересборка — 30+ ГБ трафика и часы).
-    private static string DbPath = Path.Combine(AppContext.BaseDirectory, "data", "gar.sqlite");
+    private static string DbPath = AppPaths.InRoot("data", "gar.sqlite");
     private static bool IncludeHouses;
     private static bool DeleteSourceAfterImport = true;
     private static string OsmSource = "https://download.geofabrik.de/russia-latest.osm.pbf";
@@ -676,7 +676,7 @@ public class Program
     private static void LoadConfiguration()
     {
         var fullConfig = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
+            .SetBasePath(AppPaths.Root)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
             .Build();

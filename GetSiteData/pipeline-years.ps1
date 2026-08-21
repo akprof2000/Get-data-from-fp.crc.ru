@@ -43,7 +43,10 @@ function Append-Mark($path, $line) { [System.IO.File]::AppendAllText($path, "$li
 
 function Invoke-Stage($exe, $stageName, $arguments) {
     Write-Mark $flag $stageName
-    if ($arguments) { & (Join-Path $Root $exe) $arguments } else { & (Join-Path $Root $exe) }
+    # Приложения лежат в подкаталоге bin (в корне — конфиг, данные и скрипты).
+    $path = Join-Path (Join-Path $Root "bin") $exe
+    if (-not (Test-Path $path)) { $path = Join-Path $Root $exe }   # плоская раскладка старых поставок
+    if ($arguments) { & $path $arguments } else { & $path }
     if ($LASTEXITCODE -ne 0) { throw "$exe завершился с кодом $LASTEXITCODE" }
 }
 

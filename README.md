@@ -85,7 +85,8 @@ flowchart TB
 ├── run-pipeline.sh        ▶️ запуск всех этапов подряд (Linux)
 ├── pipeline-years.ps1     🗓️ погодовой сбор с чекпоинтами (Windows)
 ├── pipeline-years.sh      🗓️ погодовой сбор с чекпоинтами (Linux)
-├── pipeline-status.ps1    📊 живой пульт конвейера (Windows)
+├── pipeline-status.ps1    📊 живой пульт конвейера (Windows): этапы, годы,
+│                          прошедшее время и оценка остатка
 ├── json_to_clickhouse.py  5️⃣ загрузка JSON в ClickHouse (необязательно)
 ├── requirements.txt       🐍 зависимость скрипта (clickhouse-driver)
 ├── data/

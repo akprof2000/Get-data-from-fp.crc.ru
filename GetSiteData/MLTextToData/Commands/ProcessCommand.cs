@@ -50,8 +50,10 @@ public class ProcessCommand(
             }
         });
 
-        Log.Phase($"Готово: обработано {processed}, ошибок {failed}.");
+        Log.Phase($"Готово: обработано {processed}, пропущено (уже разложены) {_skipped}, ошибок {failed}.");
     }
+
+    private int _skipped;
 
     private async Task ProcessFileAsync(string path)
     {
@@ -59,28 +61,34 @@ public class ProcessCommand(
         // чтобы структура <год>/<месяц>/<документ> не терялась при копировании.
         var relativePath = Path.GetRelativePath(scanner.Root, path);
 
-        var hash = hashService.ComputeHash(path);
-        var lastWrite = File.GetLastWriteTimeUtc(path);
-
-        // Дедупликация в два ключа: тот же контент (хэш) или тот же путь,
-        // при неизменной дате записи — файл уже классифицирован, пропускаем.
-        var byHash = await repo.GetByHashAsync(hash);
-        if (byHash is { Processed: true } && byHash.LastWriteTimeUtc == lastWrite)
-        {
-            return;
-        }
-
-        var existing = await repo.GetByPathAsync(path);
-        if (existing is { Processed: true } && existing.LastWriteTimeUtc == lastWrite)
-        {
-            return;
-        }
-
-        // Уже скопирован в один из выходных каталогов (например, база состояния
-        // была удалена или перенесена) — не копируем повторно.
+        // САМАЯ дешёвая проверка идёт первой: если файл уже разложен в cells/ или
+        // other/, делать нечего. Раньше здесь сначала читался весь файл ради хэша
+        // и делались два запроса в LiteDB — на корпусе в сотни тысяч документов
+        // повторный прогон впустую перечитывал десятки гигабайт.
         if (File.Exists(Path.Combine(cellsOutput, relativePath)) ||
             File.Exists(Path.Combine(otherOutput, relativePath)))
         {
+            Interlocked.Increment(ref _skipped);
+            return;
+        }
+
+        var lastWrite = File.GetLastWriteTimeUtc(path);
+
+        // Тот же путь при неизменной дате записи — файл уже классифицирован.
+        var existing = await repo.GetByPathAsync(path);
+        if (existing is { Processed: true } && existing.LastWriteTimeUtc == lastWrite)
+        {
+            Interlocked.Increment(ref _skipped);
+            return;
+        }
+
+        // Хэш считаем только для файлов, которые реально предстоит обрабатывать:
+        // он ловит дубликат содержимого под другим именем.
+        var hash = hashService.ComputeHash(path);
+        var byHash = await repo.GetByHashAsync(hash);
+        if (byHash is { Processed: true } && byHash.LastWriteTimeUtc == lastWrite)
+        {
+            Interlocked.Increment(ref _skipped);
             return;
         }
 

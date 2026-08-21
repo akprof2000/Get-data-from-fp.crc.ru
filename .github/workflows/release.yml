@@ -63,11 +63,36 @@ jobs:
           fi
           for p in $PROJECTS; do
             dotnet publish "GetSiteData/$p/$p.csproj" \
-              -c Release -r ${{ matrix.rid }} $extra -o "$out"
+              -c Release -r ${{ matrix.rid }} $extra -o "$out/bin"
           done
+
+          # Поднимаем «человеческие» файлы из bin в корень поставки.
+          for f in appsettings.json run-pipeline.cmd run-pipeline.sh                    pipeline-status.ps1 pipeline-years.ps1 pipeline-years.sh                    json_to_clickhouse.py requirements.txt; do
+            [ -f "$out/bin/$f" ] && mv "$out/bin/$f" "$out/$f"
+          done
+          [ -d "$out/bin/data" ] && mv "$out/bin/data" "$out/data"
+
+          # Тонкие лаунчеры: запуск приложения из корня, рабочий каталог — корень.
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then
+            for p in $PROJECTS; do
+              printf '@echo off
+cd /d "%%~dp0"
+"%%~dp0bin\%s.exe" %%*
+' "$p" > "$out/$p.cmd"
+            done
+          else
+            for p in $PROJECTS; do
+              printf '#!/usr/bin/env bash
+cd "$(dirname "$0")"
+exec ./bin/%s "$@"
+' "$p" > "$out/$p.sh"
+              chmod +x "$out/$p.sh"
+            done
+          fi
           # PDB и отладочный DiaSymReader в поставке не нужны и утяжеляют её.
           find "$out" -name '*.pdb' -delete
           find "$out" -name 'Microsoft.DiaSymReader.Native.*' -delete
+          echo "Файлов в корне: $(ls -1 "$out" | wc -l), в bin: $(ls -1 "$out/bin" | wc -l)"
           echo "Размер поставки: $(du -sh "$out" | cut -f1)"
 
       - name: Упаковать архив
@@ -82,7 +107,7 @@ jobs:
             echo "asset=dist/$base.zip" >> "$GITHUB_OUTPUT"
           else
             # Исполняемые файлы Linux после кросс-публикации теряют бит +x.
-            for p in $PROJECTS; do chmod +x "$dir/$p" 2>/dev/null || true; done
+            for p in $PROJECTS; do chmod +x "$dir/bin/$p" 2>/dev/null || true; chmod +x "$dir/$p.sh" 2>/dev/null || true; done
             chmod +x "$dir/run-pipeline.sh" 2>/dev/null || true
             chmod +x "$dir/pipeline-years.sh" 2>/dev/null || true
             tar czf "dist/$base.tar.gz" -C "$dir" .

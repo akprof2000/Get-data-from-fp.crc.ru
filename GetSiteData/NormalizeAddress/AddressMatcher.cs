@@ -27,12 +27,27 @@ public sealed partial class AddressMatcher
     private readonly Dictionary<int, Node> _regionByCode = [];
     private readonly Dictionary<string, List<Node>> _citiesByKey = [];
 
-    // Открытое readonly-соединение для точечных запросов домов: 34 млн домов в память
-    // не поднять, а по индексу иерархии выборка домов одной улицы мгновенна.
-    private readonly SqliteConnection? _housesDb;
+    // Точечные запросы домов: 34 млн домов в память не поднять, а по индексу иерархии
+    // выборка домов одной улицы мгновенна. Соединение — СВОЁ НА КАЖДЫЙ ПОТОК:
+    // SqliteConnection не потокобезопасен, и общий lock на одном соединении сводил
+    // Parallel.ForEach к однопоточной работе (замер: 88 файлов/с на 16 потоках).
+    // Читающие соединения SQLite независимы и масштабируются линейно.
+    private readonly string? _housesDbPath;
+    private readonly ThreadLocal<SqliteConnection> _housesDb;
 
     public AddressMatcher(string dbPath)
     {
+        _housesDb = new ThreadLocal<SqliteConnection>(() =>
+        {
+            var c = new SqliteConnection($"Data Source={_housesDbPath};Mode=ReadOnly");
+            c.Open();
+            // mmap вместо чтения через page cache: база домов — гигабайты, обращения
+            // точечные и разбросанные, страничный кэш на них не работает.
+            using var pragma = c.CreateCommand();
+            pragma.CommandText = "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-65536;";
+            pragma.ExecuteNonQuery();
+            return c;
+        }, trackAllValues: true);
         using var db = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
         db.Open();
         using (var chk = db.CreateCommand())
@@ -40,8 +55,7 @@ public sealed partial class AddressMatcher
             chk.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='houses'";
             if (Convert.ToInt64(chk.ExecuteScalar()) > 0)
             {
-                _housesDb = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
-                _housesDb.Open();
+                _housesDbPath = dbPath;
             }
         }
         using var cmd = db.CreateCommand();
@@ -871,16 +885,14 @@ public sealed partial class AddressMatcher
     /// </summary>
     private string? TryMatchHouse(long streetId, string building)
     {
-        if (_housesDb == null) return null;
+        if (_housesDbPath == null) return null;
         var want = HouseKey(building);
         if (want.Length == 0) return null;
         var wantLead = LeadNumber(building);
 
-        // Одно соединение на все потоки Parallel.ForEach: команды и ридеры
-        // SqliteConnection не потокобезопасны — сериализуем запросы домов.
-        lock (_housesDb)
+        var conn = _housesDb.Value!;
         {
-        using var cmd = _housesDb.CreateCommand();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT h.guid, h.housenum FROM hierarchy hi
             JOIN houses h ON h.objectid = hi.objectid

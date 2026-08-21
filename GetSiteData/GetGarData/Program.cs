@@ -131,7 +131,7 @@ public class Program
     private static void LoadConfiguration()
     {
         var fullConfig = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
+            .SetBasePath(AppPaths.Root)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
             .Build();

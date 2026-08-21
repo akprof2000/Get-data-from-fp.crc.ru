@@ -43,14 +43,14 @@ echo "============================================"
 # несколько лет — погодовой цикл со сносом HTML каждого года после разбора и
 # отметками works/.years-done (перезапуск продолжает с недособранного года).
 run_step "1-2/6 Сбор страниц и разбор в тексты" ./pipeline-years.sh "$(pwd)"
-run_step "3/6 Классификация"                   ./MLTextToData process
-run_step "4/6 Извлечение данных в JSON"        ./ParseTextHeader
+run_step "3/6 Классификация"                   ./bin/MLTextToData process
+run_step "4/6 Извлечение данных в JSON"        ./bin/ParseTextHeader
 
 # Нормализация адресов по офлайн-базе ГАР. Базы нет - приложение само пытается
 # её собрать (по URL или из локальной выгрузки GarSource); собрать неоткуда -
 # этап пропускается без ошибки, конвейер продолжается.
-run_step "5/6 Обновление базы ГАР+OSM"     ./NormalizeAddress update
-run_step "6/6 Нормализация адресов по ГАР" ./NormalizeAddress normalize
+run_step "5/6 Обновление базы ГАР+OSM"     ./bin/NormalizeAddress update
+run_step "6/6 Нормализация адресов по ГАР" ./bin/NormalizeAddress normalize
 
 echo
 echo "============================================"

@@ -21,7 +21,13 @@ to="${GetSiteData__Search__PeriodEnd:-$(printf '%s' "$cfg" | grep -o '"PeriodEnd
 from_month=$((10#${from%%.*})); from_year=${from##*.}
 to_month=$((10#${to%%.*}));     to_year=${to##*.}
 
-stage() { printf '%s\n' "$2" > "$FLAG" 2>/dev/null || true; "$DIR/$1" ${3:-}; }
+stage() {
+    printf '%s
+' "$2" > "$FLAG" 2>/dev/null || true
+    local exe="$DIR/bin/$1"
+    [ -x "$exe" ] || exe="$DIR/$1"      # плоская раскладка старых поставок
+    "$exe" ${3:-}
+}
 
 if [ "$from_year" = "$to_year" ]; then
     stage GetSiteData collect
