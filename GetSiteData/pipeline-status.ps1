@@ -203,11 +203,10 @@ $doneBlock
     $final = ($stage -eq "done" -or $stage -eq "failed")
     $title = if ($stage -eq "done") { "Конвейер завершён" } elseif ($stage -eq "failed") { "Конвейер остановлен ошибкой" } else { "Конвейер работает" }
     # Готовую страницу больше не перезагружаем: refresh нужен только в работе.
-    $meta  = if ($final) { "" } else { '<meta http-equiv="refresh" content="2">' }
-    $sub   = if ($stage -eq "done") { "работа завершена" } elseif ($stage -eq "failed") { "подробности — в logs/" } else { "страница сама обновляется каждые 2 с" }
+    $autoReload = if ($final) { "false" } else { "true" }
+    $sub   = if ($stage -eq "done") { "работа завершена" } elseif ($stage -eq "failed") { "подробности — в logs/" } else { "страница сама обновляется каждые 2 с (состояние блоков сохраняется)" }
 @"
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
-$meta
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E"><title>Пульт конвейера fp.crc.ru</title>
 <style>
 body{margin:0;padding:32px 16px;background:#f6f5f1;color:#22303a;font:16px/1.5 system-ui,sans-serif}
@@ -246,20 +245,45 @@ $yearsBlock
 // переживает перезагрузку даже при открытии файла с диска; заодно возвращаем
 // позицию прокрутки.
 (function () {
+  var AUTO = $autoReload;          // пока конвейер работает — обновляемся сами
   var box = document.getElementById("years");
+
+  // Состояние раскрытого блока держим в хеше адреса: он переживает и нашу
+  // перезагрузку, и ручное обновление страницы (F5). history.replaceState на
+  // file:// браузеры часто запрещают, поэтому пишем location.hash напрямую.
+  function remember(open) {
+    var want = open ? "#years-open" : "#years-closed";
+    if (location.hash !== want) {
+      try { history.replaceState(null, "", want); } catch (e) { location.hash = want; }
+    }
+  }
   if (box) {
     if (location.hash === "#years-open") { box.open = true; }
-    box.addEventListener("toggle", function () {
-      try { history.replaceState(null, "", box.open ? "#years-open" : "#years-closed"); } catch (e) {}
-    });
+    box.addEventListener("toggle", function () { remember(box.open); });
   }
-  try {
-    var y = sessionStorage.getItem("pultScroll");
-    if (y) { window.scrollTo(0, parseInt(y, 10)); }
-    window.addEventListener("beforeunload", function () {
-      sessionStorage.setItem("pultScroll", String(window.scrollY));
-    });
-  } catch (e) {}
+
+  // Позиция прокрутки — тоже через хеш-независимое хранилище с запасным вариантом.
+  var KEY = "pultScroll";
+  function saveScroll() {
+    try { sessionStorage.setItem(KEY, String(window.scrollY)); } catch (e) { window.name = "s" + window.scrollY; }
+  }
+  function readScroll() {
+    try {
+      var v = sessionStorage.getItem(KEY);
+      if (v !== null) { return parseInt(v, 10); }
+    } catch (e) {}
+    if (window.name && window.name.charAt(0) === "s") { return parseInt(window.name.slice(1), 10) || 0; }
+    return 0;
+  }
+  var y = readScroll();
+  if (y > 0) { window.scrollTo(0, y); }
+  window.addEventListener("beforeunload", saveScroll);
+
+  // location.reload() сохраняет полный адрес вместе с хешем — в отличие от
+  // <meta http-equiv="refresh">, после которого блок схлопывался.
+  if (AUTO) {
+    setTimeout(function () { saveScroll(); location.reload(); }, 2000);
+  }
 })();
 </script>
 </body></html>
