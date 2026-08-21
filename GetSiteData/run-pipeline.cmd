@@ -113,6 +113,8 @@ goto :fail
 set STEP=6/6 Нормализация адресов
 
 :fail
+>"%~dp0works\.pipeline-running" echo failed
+timeout /t 4 /nobreak >nul
 echo.
 echo ============================================
 echo   ОШИБКА на этапе: %STEP% (код %RC%)
