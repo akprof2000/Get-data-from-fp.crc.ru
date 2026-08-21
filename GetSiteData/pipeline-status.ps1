@@ -184,7 +184,7 @@ while ($true) {
         $doneBlock = ""
         if ($rowsDone) {
             $doneBlock = @"
-<details class="folded">
+<details class="folded" id="years">
 <summary>Собранные годы: $doneCount — развернуть</summary>
 <table>$head
 $rowsDone</table>
@@ -239,7 +239,30 @@ details.folded>table{margin-top:8px}
 $body</table>
 $yearsBlock
 <p class="note">Этапы инкрементальные: повторный запуск докачивает и дообрабатывает только новое. Подробности — в logs/&lt;приложение&gt;.log.</p>
-</div></body></html>
+</div>
+<script>
+// Страница сама перезагружается каждые 2 секунды, поэтому раскрытый блок
+// схлопывался. Состояние держим в адресной строке (#years-open) — оно
+// переживает перезагрузку даже при открытии файла с диска; заодно возвращаем
+// позицию прокрутки.
+(function () {
+  var box = document.getElementById("years");
+  if (box) {
+    if (location.hash === "#years-open") { box.open = true; }
+    box.addEventListener("toggle", function () {
+      try { history.replaceState(null, "", box.open ? "#years-open" : "#years-closed"); } catch (e) {}
+    });
+  }
+  try {
+    var y = sessionStorage.getItem("pultScroll");
+    if (y) { window.scrollTo(0, parseInt(y, 10)); }
+    window.addEventListener("beforeunload", function () {
+      sessionStorage.setItem("pultScroll", String(window.scrollY));
+    });
+  } catch (e) {}
+})();
+</script>
+</body></html>
 "@ | Set-Content -Path $page -Encoding UTF8
     if ($last -eq "done" -or $last -eq "failed") { break }
     Start-Sleep -Seconds 2
