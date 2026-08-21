@@ -9,6 +9,10 @@
 param([string]$Root = (Split-Path -Parent $MyInvocation.MyCommand.Path))
 
 $ErrorActionPreference = "Stop"
+# Приложения конвейера резолвят относительные пути (WorkRoot=works) от ТЕКУЩЕГО
+# каталога процесса, поэтому переходим в каталог поставки: иначе works/ окажется
+# там, откуда запустили скрипт.
+Set-Location $Root
 $works   = Join-Path $Root "works"
 $done    = Join-Path $works ".years-done"
 $current = Join-Path $works ".year-current"

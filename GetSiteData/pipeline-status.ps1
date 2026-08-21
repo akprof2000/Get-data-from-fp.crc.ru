@@ -10,6 +10,28 @@ New-Item -ItemType Directory -Force $works | Out-Null
 
 function CountFiles($p) { (Get-ChildItem (Join-Path $works $p) -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count }
 
+# Погодовой сбор: список лет периода + отметки о завершённых (works/.years-done)
+# и текущем (works/.year-current). При однолетнем периоде таблица не выводится.
+function Get-YearPlan {
+    try {
+        $cfgText = (Get-Content (Join-Path $root "appsettings.json") -Raw -Encoding UTF8) -replace '(?m)^\s*//.*$', ''
+        $cfg = $cfgText | ConvertFrom-Json
+        $from = if ($env:GetSiteData__Search__PeriodStart) { $env:GetSiteData__Search__PeriodStart } else { $cfg.GetSiteData.Search.PeriodStart }
+        $to   = if ($env:GetSiteData__Search__PeriodEnd)   { $env:GetSiteData__Search__PeriodEnd }   else { $cfg.GetSiteData.Search.PeriodEnd }
+        $y1 = [int]$from.Split('.')[1]; $y2 = [int]$to.Split('.')[1]
+        if ($y1 -eq $y2) { return $null }
+        $doneYears = @()
+        if (Test-Path (Join-Path $works ".years-done")) {
+            $doneYears = @(Get-Content (Join-Path $works ".years-done") | Where-Object { $_ -match '^\d{4}$' })
+        }
+        $cur = ""
+        if (Test-Path (Join-Path $works ".year-current")) {
+            $cur = (Get-Content (Join-Path $works ".year-current") | Select-Object -First 1)
+        }
+        return [pscustomobject]@{ Years = @($y1..$y2); Done = $doneYears; Current = $cur; From = $from; To = $to }
+    } catch { return $null }
+}
+
 while (Test-Path $flag) {
     $stage = (Get-Content $flag -ErrorAction SilentlyContinue | Select-Object -First 1)
     $c = @{
@@ -40,6 +62,41 @@ while (Test-Path $flag) {
                  "<td><div class='bar'><i class='$st' style='width:$w%'></i></div></td>" +
                  "<td class='num'>$($r[2])</td></tr>`n"
     }
+    # Подстатус по годам (только для многолетних периодов).
+    $plan = Get-YearPlan
+    $yearsBlock = ""
+    if ($plan) {
+        $txtByYear = @{}
+        foreach ($d in (Get-ChildItem (Join-Path $works "documents") -Directory -ErrorAction SilentlyContinue)) {
+            $txtByYear[$d.Name] = (Get-ChildItem $d.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
+        }
+        $htmlByYear = @{}
+        foreach ($term in (Get-ChildItem (Join-Path $works "output") -Directory -ErrorAction SilentlyContinue)) {
+            foreach ($y in (Get-ChildItem $term.FullName -Directory -ErrorAction SilentlyContinue)) {
+                $htmlByYear[$y.Name] = [int]$htmlByYear[$y.Name] + (Get-ChildItem $y.FullName -Recurse -File -ErrorAction SilentlyContinue).Count
+            }
+        }
+        $rowsY = ""
+        foreach ($y in $plan.Years) {
+            $ys = "$y"
+            if ($plan.Done -contains $ys)      { $st = "ok";   $stTxt = "собран, HTML удалён"; $w = 100 }
+            elseif ($plan.Current -eq $ys)     { $st = "run";  $stTxt = "в работе";            $w = 55 }
+            else                               { $st = "wait"; $stTxt = "ожидает";             $w = 0 }
+            $htmlNow = [int]$htmlByYear[$ys]
+            $txtNow  = [int]$txtByYear[$ys]
+            $rowsY += "<tr><td>$ys</td><td class='$st'>$stTxt</td>" +
+                      "<td><div class='bar'><i class='$st' style='width:$w%'></i></div></td>" +
+                      "<td class='num'>$htmlNow HTML · $txtNow txt</td></tr>`n"
+        }
+        $left = ($plan.Years | Where-Object { $plan.Done -notcontains "$_" }).Count
+        $yearsBlock = @"
+<h2 style="font-size:19px;margin:26px 0 6px">Годы периода ($($plan.From) — $($plan.To))</h2>
+<p class="note" style="margin:0 0 10px">Осталось обработать лет: <b>$left</b> из $($plan.Years.Count). HTML каждого года удаляется сразу после разбора в тексты; тексты накапливаются.</p>
+<table><tr><th>Год</th><th>Статус</th><th style="width:170px">Прогресс</th><th>Счётчики</th></tr>
+$rowsY</table>
+"@
+    }
+
     $stamp = Get-Date -Format "HH:mm:ss · dd.MM.yyyy"
     $title = if ($stage -eq "done") { "Конвейер завершён" } else { "Конвейер работает" }
 @"
@@ -66,6 +123,7 @@ td.num{font-family:monospace;white-space:nowrap}
 <span class="stamp">обновлено $stamp — страница сама обновляется каждые 5 с</span>
 <table><tr><th>Этап</th><th>Статус</th><th style="width:170px">Прогресс</th><th>Счётчики</th></tr>
 $body</table>
+$yearsBlock
 <p class="note">Этапы инкрементальные: повторный запуск докачивает и дообрабатывает только новое. Подробности — в logs/&lt;приложение&gt;.log.</p>
 </div></body></html>
 "@ | Set-Content -Path $page -Encoding UTF8

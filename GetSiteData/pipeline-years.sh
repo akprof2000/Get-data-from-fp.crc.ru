@@ -4,6 +4,9 @@
 # завершении. Перезапуск продолжает с недособранного года.
 set -euo pipefail
 DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Приложения резолвят относительные пути (WorkRoot=works) от текущего каталога,
+# поэтому переходим в каталог поставки.
+cd "$DIR"
 WORKS="$DIR/works"
 DONE="$WORKS/.years-done"
 CURRENT="$WORKS/.year-current"
