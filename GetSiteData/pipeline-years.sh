@@ -29,7 +29,22 @@ if [ "$from_year" = "$to_year" ]; then
     exit 0
 fi
 
+# Восстановление отметок: год с текстами и без HTML считаем собранным.
+backfilled=""
+cur_year=$( [ -f "$CURRENT" ] && head -1 "$CURRENT" || true )
+for year in $(seq "$from_year" "$to_year"); do
+    if [ -f "$DONE" ] && grep -qx "$year" "$DONE"; then continue; fi
+    [ "$year" = "${cur_year:-}" ] && continue
+    txt=$(find "$WORKS/documents/$year" -type f 2>/dev/null | wc -l)
+    [ "$txt" -eq 0 ] && continue
+    html=$(find "$WORKS/output" -mindepth 2 -maxdepth 2 -type d -name "$year" -exec find {} -type f \; 2>/dev/null | wc -l)
+    [ "$html" -gt 0 ] && continue
+    echo "$year" >> "$DONE"
+    backfilled="$backfilled $year"
+done
+
 echo
+[ -n "$backfilled" ] && echo "Найдены готовые тексты без отметок — отмечаю годы собранными:$backfilled."
 echo "Период охватывает $from_year-$to_year — собираем по годам (HTML каждого года удаляется после разбора)."
 [ -f "$DONE" ] && echo "Уже собраны ранее: $(tr '\n' ' ' < "$DONE")— пропускаю."
 

@@ -20,13 +20,15 @@ function Get-YearPlan {
         $to   = if ($env:GetSiteData__Search__PeriodEnd)   { $env:GetSiteData__Search__PeriodEnd }   else { $cfg.GetSiteData.Search.PeriodEnd }
         $y1 = [int]$from.Split('.')[1]; $y2 = [int]$to.Split('.')[1]
         if ($y1 -eq $y2) { return $null }
+        # BOM у файлов отметок отсекаем: иначе первый год выглядел бы несобранным.
         $doneYears = @()
         if (Test-Path (Join-Path $works ".years-done")) {
-            $doneYears = @(Get-Content (Join-Path $works ".years-done") | Where-Object { $_ -match '^\d{4}$' })
+            $doneYears = @(Get-Content (Join-Path $works ".years-done") -Encoding UTF8 |
+                           ForEach-Object { $_.Trim([char]0xFEFF, ' ') } | Where-Object { $_ -match '^\d{4}$' })
         }
         $cur = ""
         if (Test-Path (Join-Path $works ".year-current")) {
-            $cur = (Get-Content (Join-Path $works ".year-current") | Select-Object -First 1)
+            $cur = ((Get-Content (Join-Path $works ".year-current") -Encoding UTF8 | Select-Object -First 1) -replace [char]0xFEFF, '').Trim()
         }
         return [pscustomobject]@{ Years = @($y1..$y2); Done = $doneYears; Current = $cur; From = $from; To = $to }
     } catch { return $null }
@@ -37,7 +39,7 @@ $lastReal = "collect"
 while ($true) {
     # Флаг исчез (конвейер закончил или упал) — это «done»/«failed», а не повод
     # оставить страницу на промежуточном кадре.
-    $stage = if (Test-Path $flag) { (Get-Content $flag -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "done" }
+    $stage = if (Test-Path $flag) { ((Get-Content $flag -ErrorAction SilentlyContinue | Select-Object -First 1) -replace [char]0xFEFF, '').Trim() } else { "done" }
     if ($stage) { $last = $stage }
     # Запоминаем последний РЕАЛЬНЫЙ этап: «failed» приходит вместо него, и без
     # этого красным помечался бы первый этап, а не тот, на котором упало.

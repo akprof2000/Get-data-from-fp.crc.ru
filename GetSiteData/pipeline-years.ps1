@@ -30,8 +30,19 @@ $to   = if ($env:GetSiteData__Search__PeriodEnd)   { $env:GetSiteData__Search__P
 $fromMonth = [int]$from.Split('.')[0]; $fromYear = [int]$from.Split('.')[1]
 $toMonth   = [int]$to.Split('.')[0];   $toYear   = [int]$to.Split('.')[1]
 
+# PowerShell по умолчанию пишет UTF8 С BOM, и первая строка файла отметок
+# читалась как «﻿2010» — фильтр «^\d{4}$» её не узнавал, поэтому первый год
+# при каждом перезапуске собирался заново. Пишем и читаем строго без BOM.
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+function Read-Marks($path) {
+    if (-not (Test-Path $path)) { return @() }
+    return @(Get-Content $path -Encoding UTF8 | ForEach-Object { $_.Trim([char]0xFEFF, ' ', [char]9) } | Where-Object { $_ })
+}
+function Write-Mark($path, $line)  { [System.IO.File]::WriteAllText($path, "$line`r`n", $Utf8NoBom) }
+function Append-Mark($path, $line) { [System.IO.File]::AppendAllText($path, "$line`r`n", $Utf8NoBom) }
+
 function Invoke-Stage($exe, $stageName, $arguments) {
-    Set-Content -Path $flag -Value $stageName -Encoding UTF8 -ErrorAction SilentlyContinue
+    Write-Mark $flag $stageName
     if ($arguments) { & (Join-Path $Root $exe) $arguments } else { & (Join-Path $Root $exe) }
     if ($LASTEXITCODE -ne 0) { throw "$exe завершился с кодом $LASTEXITCODE" }
 }
@@ -43,10 +54,35 @@ if ($fromYear -eq $toYear) {
     exit 0
 }
 
-$doneYears = @()
-if (Test-Path $done) { $doneYears = @(Get-Content $done | Where-Object { $_ -match '^\d{4}$' }) }
+$doneYears = @(Read-Marks $done | Where-Object { $_ -match '^\d{4}$' })
+
+# Восстановление отметок после переноса данных или потери файла: год, у которого
+# УЖЕ есть тексты и не осталось HTML, считаем собранным. Иначе перенесённые
+# works/documents ничего не значили бы и все годы качались бы заново.
+$backfilled = @()
+foreach ($year in $fromYear..$toYear) {
+    $ys = "$year"
+    if ($doneYears -contains $ys) { continue }
+    if ($ys -eq (Read-Marks $current | Select-Object -First 1)) { continue }   # текущий год дособираем
+    $txtDir = Join-Path (Join-Path $works "documents") $ys
+    if (-not (Test-Path $txtDir)) { continue }
+    if ((Get-ChildItem $txtDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) { continue }
+    $htmlLeft = 0
+    foreach ($term in (Get-ChildItem (Join-Path $works "output") -Directory -ErrorAction SilentlyContinue)) {
+        $yd = Join-Path $term.FullName $ys
+        if (Test-Path $yd) { $htmlLeft += (Get-ChildItem $yd -Recurse -File -ErrorAction SilentlyContinue).Count }
+    }
+    if ($htmlLeft -gt 0) { continue }
+    Append-Mark $done $ys
+    $doneYears += $ys
+    $backfilled += $ys
+}
 
 Write-Host ""
+if ($backfilled.Count -gt 0) {
+    Write-Host "Найдены готовые тексты без отметок — отмечаю годы собранными: $($backfilled -join ', ')."
+    Write-Host "Если эти годы нужно собрать заново, удалите works/.years-done и соответствующие works/documents/<год>."
+}
 Write-Host "Период охватывает $fromYear-$toYear — собираем по годам (HTML каждого года удаляется после разбора)."
 if ($doneYears.Count -gt 0) { Write-Host "Уже собраны ранее: $($doneYears -join ', ') — пропускаю." }
 
@@ -57,7 +93,7 @@ foreach ($year in $fromYear..$toYear) {
     $mFrom = if ($year -eq $fromYear) { $fromMonth } else { 1 }
     $mTo   = if ($year -eq $toYear)   { $toMonth }   else { 12 }
 
-    Set-Content -Path $current -Value "$year" -Encoding UTF8
+    Write-Mark $current "$year"
     Write-Host ""
     Write-Host "===== Год $year (месяцы $mFrom-$mTo) ====="
 
@@ -78,7 +114,7 @@ foreach ($year in $fromYear..$toYear) {
     }
     Write-Host ("Год {0}: HTML удалён, освобождено {1:N0} МБ." -f $year, ($freed / 1MB))
 
-    Add-Content -Path $done -Value "$year" -Encoding UTF8
+    Append-Mark $done "$year"
     Remove-Item $current -Force -ErrorAction SilentlyContinue
 }
 
