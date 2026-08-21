@@ -52,10 +52,12 @@ jobs:
       - name: Публикация всех приложений в один каталог
         run: |
           out="publish/${{ matrix.kind }}-${{ matrix.rid }}"
-          # standalone — самодостаточный один файл на приложение;
-          # compact — обычная framework-dependent поставка с библиотеками рядом.
+          # standalone — самодостаточная поставка с ОБЩИМ рантаймом: все шесть
+          # приложений публикуются в один каталог, поэтому библиотеки .NET лежат
+          # одним комплектом, а не по копии внутри каждого single-file exe
+          # (441 МБ → ~99 МБ). compact — framework-dependent, рантайм из системы.
           if [ "${{ matrix.kind }}" = "standalone" ]; then
-            extra="--self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true"
+            extra="--self-contained true -p:PublishSingleFile=false"
           else
             extra="--self-contained false"
           fi
@@ -63,8 +65,10 @@ jobs:
             dotnet publish "GetSiteData/$p/$p.csproj" \
               -c Release -r ${{ matrix.rid }} $extra -o "$out"
           done
-          # PDB в поставке не нужны и заметно её утяжеляют.
+          # PDB и отладочный DiaSymReader в поставке не нужны и утяжеляют её.
           find "$out" -name '*.pdb' -delete
+          find "$out" -name 'Microsoft.DiaSymReader.Native.*' -delete
+          echo "Размер поставки: $(du -sh "$out" | cut -f1)"
 
       - name: Упаковать архив
         id: pack
