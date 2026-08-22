@@ -11,6 +11,7 @@
 //   GarSource — путь к gar_xml.zip или https-URL выгрузки;
 //   DbPath    — путь к SQLite-базе (относительный — под WorkRoot).
 using GetSiteData.Common;
+using System.IO.Compression;
 using Microsoft.Extensions.Configuration;
 
 namespace NormalizeAddress;
@@ -188,6 +189,94 @@ public class Program
     /// и записывается в OutputNormalizedPath тем же относительным путём. Уже обработанные
     /// файлы пропускаются — этап инкрементален и перезапускаем.
     /// </summary>
+    /// <summary>
+    /// Запись результатов прямо в ZIP, без раскладки сотен тысяч мелких файлов на
+    /// диске. Структура каталогов сохраняется в именах записей («2019/04/имя.json»).
+    ///
+    /// Дозапись ведётся ТОМАМИ: ZipArchiveMode.Update поднимает весь архив в память,
+    /// что на 700 тыс. записей неприемлемо, поэтому продолжение прогона создаёт
+    /// соседний том «<имя>.partN.zip». Готовыми считаются записи ВСЕХ томов —
+    /// их оглавления читаются мгновенно, без распаковки.
+    /// </summary>
+    private sealed class ZipOutput : IDisposable
+    {
+        private readonly ZipArchive _zip;
+        private readonly FileStream _file;
+        private readonly Lock _lock = new();
+
+        public string Path { get; }
+
+        private ZipOutput(string path)
+        {
+            Path = path;
+            _file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20);
+            _zip = new ZipArchive(_file, ZipArchiveMode.Create, leaveOpen: false);
+        }
+
+        /// <summary>Открывает НОВЫЙ том рядом с уже существующими.</summary>
+        public static ZipOutput CreateVolume(string basePath)
+        {
+            if (!File.Exists(basePath)) return new ZipOutput(basePath);
+            var dir = System.IO.Path.GetDirectoryName(basePath)!;
+            var name = System.IO.Path.GetFileNameWithoutExtension(basePath);
+            for (int n = 2; ; n++)
+            {
+                var candidate = System.IO.Path.Combine(dir, $"{name}.part{n}.zip");
+                if (!File.Exists(candidate)) return new ZipOutput(candidate);
+            }
+        }
+
+        /// <summary>Имена записей во всех томах — что уже нормализовано.</summary>
+        public static HashSet<string> ReadDone(string basePath)
+        {
+            var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var vol in EnumerateVolumes(basePath))
+            {
+                try
+                {
+                    using var zip = ZipFile.OpenRead(vol);
+                    foreach (var e in zip.Entries) done.Add(e.FullName);
+                }
+                catch (Exception ex)
+                {
+                    // Оборванный том (выключение во время записи) читаем насколько
+                    // получится: его записи просто разберутся заново.
+                    Log.Warn($"Том {System.IO.Path.GetFileName(vol)} читается не полностью: {ex.Message}");
+                }
+            }
+            return done;
+        }
+
+        public static IEnumerable<string> EnumerateVolumes(string basePath)
+        {
+            if (File.Exists(basePath)) yield return basePath;
+            var dir = System.IO.Path.GetDirectoryName(basePath)!;
+            var name = System.IO.Path.GetFileNameWithoutExtension(basePath);
+            if (!Directory.Exists(dir)) yield break;
+            foreach (var f in Directory.EnumerateFiles(dir, $"{name}.part*.zip"))
+                yield return f;
+        }
+
+        /// <summary>Кладёт документ в архив. ZipArchive не потокобезопасен — пишем под блокировкой.</summary>
+        public void Write(string relativePath, string content)
+        {
+            var entryName = relativePath.Replace(System.IO.Path.DirectorySeparatorChar, '/');
+            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+            lock (_lock)
+            {
+                var entry = _zip.CreateEntry(entryName, CompressionLevel.Optimal);
+                using var s = entry.Open();
+                s.Write(bytes, 0, bytes.Length);
+            }
+        }
+
+        public void Dispose()
+        {
+            _zip.Dispose();
+            _file.Dispose();
+        }
+    }
+
     private static int RunNormalize()
     {
         Log.Phase("Нормализация адресов по ГАР");
@@ -251,6 +340,18 @@ public class Program
             Log.Info("Координаты адресов не заполняются: полная адресная книга (IncludeHouses) выключена.");
         }
 
+        // Выход в ZIP: путь оканчивается на «.zip» — результаты кладутся прямо в
+        // архив, на диске не появляется ни одного мелкого json (700 тыс. файлов
+        // раскладкой по каталогам занимают на порядок больше места и времени).
+        if (!Directory.Exists(InputJsonPath))
+        {
+            Log.Error($"Входной каталог не найден: {InputJsonPath}");
+            return 1;
+        }
+
+        var zipMode = OutputNormalizedPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+        HashSet<string>? zipDone = zipMode ? ZipOutput.ReadDone(OutputNormalizedPath) : null;
+
         // Пропуск уже сделанного идём ПО КАТАЛОГАМ (год/месяц), а не по файлам:
         // выход — всегда подмножество входа с теми же именами, поэтому равенство
         // количеств в паре каталогов означает «месяц нормализован целиком», и его
@@ -287,11 +388,26 @@ public class Program
         foreach (var dir in leafDirs)
         {
             var rel = Path.GetRelativePath(InputJsonPath, dir);
-            var outDir = rel == "." ? OutputNormalizedPath : Path.Combine(OutputNormalizedPath, rel);
 
             var inCount = CountJson(dir);
             if (inCount == 0) continue;
             totalInput += inCount;
+
+            if (zipMode)
+            {
+                // В архиве сравниваем по именам записей: оглавление уже прочитано,
+                // отдельных обращений к диску это не стоит.
+                foreach (var f in Directory.EnumerateFiles(dir, "*.json", SearchOption.TopDirectoryOnly))
+                {
+                    if (f.EndsWith("_processed.json")) continue;
+                    var name = Path.GetFileName(f);
+                    var relEntry = (rel == "." ? name : Path.Combine(rel, name)).Replace(Path.DirectorySeparatorChar, '/');
+                    if (!zipDone!.Contains(relEntry)) files.Add((f, relEntry));
+                }
+                continue;
+            }
+
+            var outDir = rel == "." ? OutputNormalizedPath : Path.Combine(OutputNormalizedPath, rel);
 
             // Счётчики совпали — каталог готов целиком, имена не перечисляем.
             if (CountJsonNonEmpty(outDir) == inCount) { skippedWholeDirs++; continue; }
@@ -316,6 +432,10 @@ public class Program
         Log.Info($"Всего JSON на входе : {totalInput:N0}");
         Log.Info($"Уже нормализовано   : {already:N0} (пропускаем)");
         Log.Info($"К обработке         : {files.Count:N0}");
+
+        // Том архива создаём ПОСЛЕ подсчёта: пустой том при «нечего делать» не нужен.
+        using var zipWriter = zipMode && files.Count > 0 ? ZipOutput.CreateVolume(OutputNormalizedPath) : null;
+        if (zipWriter != null) Log.Info($"Пишем в архив       : {Path.GetFileName(zipWriter.Path)}");
 
         long done = 0, matchedStreet = 0, matchedPlace = 0, regionOnly = 0, none = 0;
         Parallel.ForEach(files, x =>
@@ -368,14 +488,22 @@ public class Program
 
             node["address"] = System.Text.Json.JsonSerializer.SerializeToNode(addr, AddrJsonOpts);
 
-            // Пишем во временный файл и переименовываем: при обрыве процесса (Ctrl+C,
-            // выключение) обычная запись оставляла ОБРЕЗАННЫЙ json, а он считается
-            // готовым — такой документ больше никогда бы не переразобрался.
-            var target = Path.Combine(OutputNormalizedPath, x.Rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            var tmp = target + ".tmp";
-            File.WriteAllText(tmp, node.ToJsonString(AddrJsonOpts));
-            File.Move(tmp, target, overwrite: true);
+            var json = node.ToJsonString(AddrJsonOpts);
+            if (zipWriter != null)
+            {
+                zipWriter.Write(x.Rel, json);
+            }
+            else
+            {
+                // Пишем во временный файл и переименовываем: при обрыве процесса (Ctrl+C,
+                // выключение) обычная запись оставляла ОБРЕЗАННЫЙ json, а он считается
+                // готовым — такой документ больше никогда бы не переразобрался.
+                var target = Path.Combine(OutputNormalizedPath, x.Rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                var tmp = target + ".tmp";
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, target, overwrite: true);
+            }
 
             switch (addr.MatchLevel)
             {

@@ -22,7 +22,7 @@ flowchart LR
     D -->|только базовые станции| E[🔍 ParseTextHeader<br>извлечение полей]
     E -->|"works/OutputJson/*.json"| F[(📦 Готовые данные<br>номер · адрес · координаты · оператор)]
     E -->|неполные: поле missingFields| F
-    F -->|обогащение адресом по ГАР| N[🗺️ NormalizeAddress<br>works/OutputNormalized]
+    F -->|обогащение адресом по ГАР| N[🗺️ NormalizeAddress<br>works/OutputNormalized.zip]
     F -.->|необязательно| H[🐍 json_to_clickhouse.py<br>загрузка в ClickHouse]
     H -.-> I[(🗄️ ClickHouse<br>base_stations)]
 ```
@@ -360,11 +360,26 @@ flowchart TB
 | `OsmSource` | URL Geofabrik | OSM-выгрузка `*.osm.pbf` для геокодера: файл или URL (полная Россия ~4 ГБ; для проверки годится региональный срез, напр. `crimean-fed-district-latest`) |
 | `OsmMaxAgeDays` | `90` | Автообновление OSM-геоданных командой `update`: старше стольких дней — переимпорт из `OsmSource` |
 | `InputJsonPath` | `OutputJson` | Откуда читать JSON |
-| `OutputNormalizedPath` | `OutputNormalized` | Куда писать обогащённые |
+| `OutputNormalizedPath` | `OutputNormalized.zip` | Куда писать обогащённые. Расширение `.zip` включает запись **прямо в архив** (см. ниже); значение без `.zip` — прежняя раскладка папками |
 
 ### 📍 Как получить адрес с координатами
 
-В обогащённом JSON (`works/OutputNormalized/*.json`) есть всё сразу:
+#### Выход в ZIP (по умолчанию)
+
+Результаты пишутся прямо в `works/OutputNormalized.zip`, минуя раскладку сотен тысяч
+мелких файлов: на корпусе в 700 тыс. документов это кратная экономия места (замер на
+55 341 документе: 99,1 МБ папкой против 60,9 МБ архивом, а по занятому на диске месту
+разрыв больше — каждый файл занимает минимум кластер). Структура каталогов сохраняется
+в именах записей: `2019/04/<документ>.json`, распаковка даёт прежнее дерево.
+
+Продолжение прерванного прогона пишет соседний **том** `OutputNormalized.part2.zip`:
+штатная дозапись в ZIP поднимает весь архив в память, что на таком объёме неприемлемо.
+Готовым считается всё, что есть в любом из томов — их оглавления читаются мгновенно,
+без распаковки. `json_to_clickhouse.py` читает и сам архив, и все его тома.
+
+Нужна прежняя раскладка папками — уберите `.zip` из `OutputNormalizedPath`.
+
+В обогащённом JSON (`works/OutputNormalized.zip`, запись `<год>/<месяц>/<документ>.json`) есть всё сразу:
 
 - **`coordinates`** (корневое поле) — координаты станции **из текста документа**: это точка размещения самой станции, самый точный источник («55.634, 38.0443»);
 - **`address`** — канонический адрес по частям из ГАР + `guid` + `regionCode`; неадресные приметы места («столб в 10 м направо…») — в `address.extra`;
@@ -410,13 +425,13 @@ flowchart TB
 
 ## 🐍 Этап 5 (необязательный): json_to_clickhouse.py — выгрузка в ClickHouse
 
-Пакетно заливает готовые JSON в таблицу ClickHouse: многопоточное чтение (рассчитан на сотни тысяч файлов), батчевая вставка, ротация логов и отдельный лог ошибок. **Вход по умолчанию — финальная папка `works/OutputNormalized`** (все записи, включая неполные), фолбэк — `OutputJson`.
+Пакетно заливает готовые JSON в таблицу ClickHouse: многопоточное чтение (рассчитан на сотни тысяч файлов), батчевая вставка, ротация логов и отдельный лог ошибок. **Вход по умолчанию — финальный архив `works/OutputNormalized.zip`** (все записи, включая неполные; читается напрямую, распаковка не нужна), фолбэк — `OutputJson`.
 
 Колонки таблицы покрывают весь JSON: номер заключения и дата, номер БС, оператор, адрес исходный и нормализованный по частям (`addr_region…addr_building`, `addr_extra`, `addr_match_level`, `addr_guid`, `addr_region_code`, `addr_lat/lon`, `addr_geo_level`), координаты станции, высоты подвеса (`antenna_heights Array(Float64)`, `antenna_bases Array(String)`, `antenna_models Array(String)`, `antenna_numbers Array(Int32)`), конфликт обратной сверки (`coords_conflict_place`, `coords_conflict_place_km`, `coords_conflict_street`, `coords_conflict_parsed_km`, `coords_conflict_source`) и `missing_fields Array(String)` — в базе сразу видно, каких обязательных полей не было в первоисточнике.
 
 ```powershell
 pip install -r requirements.txt
-python json_to_clickhouse.py --input-dir works/OutputNormalized --host localhost --database sanpin --table base_stations
+python json_to_clickhouse.py --input-dir works/OutputNormalized.zip --host localhost --database sanpin --table base_stations
 ```
 
 🔒 Реквизиты подключения **в коде не хранятся** — задавайте их флагами или переменными окружения:

@@ -19,6 +19,8 @@
 
 import argparse
 import json
+import threading
+import zipfile
 import logging
 import logging.handlers
 import os
@@ -243,7 +245,7 @@ def parse_document_number_and_date(value: Optional[str], logger: logging.Logger)
     return doc_number, doc_date
 
 
-def doc_number_and_date_from_name(file_path: Path, logger: logging.Logger) -> Tuple[Optional[str], Optional[date]]:
+def doc_number_and_date_from_name(file_path, logger: logging.Logger) -> Tuple[Optional[str], Optional[date]]:
     """Номер и дата из ИМЕНИ файла — запасной источник для документов, где поле
     documentNumberAndDate не разобралось. Имя всегда имеет вид
     «01.РА.01.000.Т.000215.07.26 от 01.07.2026.json» (проверяется DOCUMENT_FILE_RE),
@@ -318,16 +320,66 @@ def safe_int(value: Any, logger: logging.Logger) -> Optional[int]:
 # Чтение JSON
 # ──────────────────────────────────────────────────────────────────────────────
 
-def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[str, Any]]:
-    """Читает и парсит один JSON-файл."""
+class ZipEntry:
+    """Документ внутри архива NormalizeAddress (works/OutputNormalized.zip).
+
+    Нормализатор умеет писать результат прямо в ZIP, без раскладки сотен тысяч
+    мелких файлов. Здесь такой архив читается как обычный источник документов:
+    имя записи («2019/04/…json») играет роль пути, структура каталогов сохранена.
+    Архивы открываются лениво и по одному на поток — ZipFile не потокобезопасен.
+    """
+
+    __slots__ = ("zip_path", "entry")
+
+    def __init__(self, zip_path: Path, entry: str) -> None:
+        self.zip_path = zip_path
+        self.entry = entry
+
+    @property
+    def name(self) -> str:
+        return self.entry.rsplit("/", 1)[-1]
+
+    @property
+    def stem(self) -> str:
+        n = self.name
+        return n[:-5] if n.endswith(".json") else n
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        zf = _thread_zip(self.zip_path)
+        with zf.open(self.entry) as f:
+            return f.read().decode(encoding)
+
+    def __str__(self) -> str:
+        return f"{self.zip_path.name}::{self.entry}"
+
+
+_zip_cache = threading.local()
+
+
+def _thread_zip(path: Path) -> zipfile.ZipFile:
+    """Открытый архив для текущего потока (ZipFile не потокобезопасен)."""
+    cache = getattr(_zip_cache, "zips", None)
+    if cache is None:
+        cache = {}
+        _zip_cache.zips = cache
+    key = str(path)
+    zf = cache.get(key)
+    if zf is None:
+        zf = zipfile.ZipFile(path, "r")
+        cache[key] = zf
+    return zf
+
+
+def parse_json_file(file_path, logger: logging.Logger) -> Optional[Dict[str, Any]]:
+    """Читает и парсит один JSON-документ (файл на диске или запись архива)."""
     logger.debug("Чтение файла: %s", file_path)
     try:
         raw = file_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         logger.error("Unicode error в %s: %s", file_path, exc)
         return None
-    except OSError as exc:
-        logger.error("OS error чтения %s: %s", file_path, exc)
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        logger.error("Ошибка чтения %s: %s", file_path, exc)
         return None
 
     # Пустой файл — не «битый json», а недописанный результат прошлого прогона
@@ -429,8 +481,34 @@ DOCUMENT_FILE_RE = re.compile(
 )
 
 
-def collect_json_files(root_dir: Path, logger: logging.Logger) -> List[Path]:
-    """Рекурсивно собирает JSON-документы конвейера (по шаблону имени)."""
+def collect_zip_entries(zip_paths: List[Path], logger: logging.Logger) -> List[ZipEntry]:
+    """Документы из архивов нормализатора, включая тома «…partN.zip»."""
+    entries: List[ZipEntry] = []
+    for zp in zip_paths:
+        try:
+            with zipfile.ZipFile(zp, "r") as zf:
+                names = [n for n in zf.namelist() if not n.endswith("/")]
+        except zipfile.BadZipFile as exc:
+            logger.error("Архив повреждён, пропускаю: %s (%s)", zp, exc)
+            continue
+        good = [ZipEntry(zp, n) for n in names if DOCUMENT_FILE_RE.match(n.rsplit("/", 1)[-1])]
+        logger.info("Архив %s: документов %d из %d записей", zp.name, len(good), len(names))
+        entries.extend(good)
+    return entries
+
+
+def collect_json_files(root_dir: Path, logger: logging.Logger):
+    """Собирает JSON-документы конвейера: из каталога, из архива или из томов архива."""
+    # Вход — сам архив либо каталог, куда нормализатор сложил тома.
+    if root_dir.is_file() and root_dir.suffix.lower() == ".zip":
+        base = root_dir.with_suffix("")
+        volumes = [root_dir] + sorted(root_dir.parent.glob(f"{base.name}.part*.zip"))
+        return collect_zip_entries(volumes, logger)
+    if root_dir.is_dir():
+        volumes = sorted(root_dir.glob("*.zip"))
+        if volumes and not any(root_dir.rglob("*.json")):
+            return collect_zip_entries(volumes, logger)
+
     logger.info("Сканирование директории: %s", root_dir)
     all_json = list(root_dir.rglob("*.json"))
     files = [f for f in all_json if DOCUMENT_FILE_RE.match(f.name)]
@@ -701,7 +779,7 @@ class ProgressReporter:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def file_reader_worker(
-    file_paths: List[Path],
+    file_paths: List[Any],
     queue: Queue,
     stats: Dict[str, int],
     stats_lock: Lock,
