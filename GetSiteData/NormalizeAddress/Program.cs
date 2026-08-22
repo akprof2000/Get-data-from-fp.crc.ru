@@ -251,12 +251,71 @@ public class Program
             Log.Info("Координаты адресов не заполняются: полная адресная книга (IncludeHouses) выключена.");
         }
 
-        var files = Directory.EnumerateFiles(InputJsonPath, "*.json", SearchOption.AllDirectories)
-            .Where(f => !f.EndsWith("_processed.json"))
-            .Select(f => (Src: f, Rel: Path.GetRelativePath(InputJsonPath, f)))
-            .Where(x => !File.Exists(Path.Combine(OutputNormalizedPath, x.Rel)))
-            .ToList();
-        Log.Info($"К обработке: {files.Count:N0}");
+        // Пропуск уже сделанного идём ПО КАТАЛОГАМ (год/месяц), а не по файлам:
+        // выход — всегда подмножество входа с теми же именами, поэтому равенство
+        // количеств в паре каталогов означает «месяц нормализован целиком», и его
+        // можно пропустить, не строя списка имён. Пофайловое сравнение остаётся
+        // только для каталогов, где счётчики разошлись, — там оно и нужно.
+        var swScan = System.Diagnostics.Stopwatch.StartNew();
+        int totalInput = 0, skippedWholeDirs = 0;
+        var files = new List<(string Src, string Rel)>();
+
+        static int CountJson(string dir) =>
+            Directory.Exists(dir)
+                ? Directory.EnumerateFiles(dir, "*.json", SearchOption.TopDirectoryOnly).Count(f => !f.EndsWith("_processed.json"))
+                : 0;
+
+        // Готовыми считаем только НЕПУСТЫЕ результаты: прежние прогоны при обрыве
+        // оставляли файлы нулевой длины (запись шла не атомарно), и такой документ
+        // считался обработанным навсегда — при загрузке в ClickHouse он падал с
+        // «Expecting value: line 1 column 1». Пустые не в счёт → каталог уходит на
+        // пофайловое сравнение, и документ переразбирается.
+        static int CountJsonNonEmpty(string dir)
+        {
+            if (!Directory.Exists(dir)) return 0;
+            var n = 0;
+            foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*.json", SearchOption.TopDirectoryOnly))
+                if (f.Length > 0 && !f.Name.EndsWith("_processed.json")) n++;
+            return n;
+        }
+
+        // Каталоги-листья входа: works/OutputJson/<год>/<месяц>. Плюс сам корень —
+        // на случай плоской раскладки.
+        var leafDirs = new List<string> { InputJsonPath };
+        leafDirs.AddRange(Directory.EnumerateDirectories(InputJsonPath, "*", SearchOption.AllDirectories));
+
+        foreach (var dir in leafDirs)
+        {
+            var rel = Path.GetRelativePath(InputJsonPath, dir);
+            var outDir = rel == "." ? OutputNormalizedPath : Path.Combine(OutputNormalizedPath, rel);
+
+            var inCount = CountJson(dir);
+            if (inCount == 0) continue;
+            totalInput += inCount;
+
+            // Счётчики совпали — каталог готов целиком, имена не перечисляем.
+            if (CountJsonNonEmpty(outDir) == inCount) { skippedWholeDirs++; continue; }
+
+            // Разошлись — сравниваем по именам, но только внутри этого каталога.
+            var doneHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (Directory.Exists(outDir))
+                foreach (var f in new DirectoryInfo(outDir).EnumerateFiles("*.json", SearchOption.TopDirectoryOnly))
+                    if (f.Length > 0) doneHere.Add(f.Name);
+
+            foreach (var f in Directory.EnumerateFiles(dir, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                if (f.EndsWith("_processed.json")) continue;
+                var name = Path.GetFileName(f);
+                if (doneHere.Contains(name)) continue;
+                files.Add((f, rel == "." ? name : Path.Combine(rel, name)));
+            }
+        }
+        swScan.Stop();
+        var already = totalInput - files.Count;
+        Log.Info($"Просмотр каталогов  : {swScan.Elapsed.TotalSeconds:F1} с, готовых целиком: {skippedWholeDirs:N0}");
+        Log.Info($"Всего JSON на входе : {totalInput:N0}");
+        Log.Info($"Уже нормализовано   : {already:N0} (пропускаем)");
+        Log.Info($"К обработке         : {files.Count:N0}");
 
         long done = 0, matchedStreet = 0, matchedPlace = 0, regionOnly = 0, none = 0;
         Parallel.ForEach(files, x =>
@@ -309,9 +368,14 @@ public class Program
 
             node["address"] = System.Text.Json.JsonSerializer.SerializeToNode(addr, AddrJsonOpts);
 
+            // Пишем во временный файл и переименовываем: при обрыве процесса (Ctrl+C,
+            // выключение) обычная запись оставляла ОБРЕЗАННЫЙ json, а он считается
+            // готовым — такой документ больше никогда бы не переразобрался.
             var target = Path.Combine(OutputNormalizedPath, x.Rel);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.WriteAllText(target, node.ToJsonString(AddrJsonOpts));
+            var tmp = target + ".tmp";
+            File.WriteAllText(tmp, node.ToJsonString(AddrJsonOpts));
+            File.Move(tmp, target, overwrite: true);
 
             switch (addr.MatchLevel)
             {
@@ -321,10 +385,19 @@ public class Program
                 default: Interlocked.Increment(ref matchedPlace); break;
             }
             var n = Interlocked.Increment(ref done);
-            if (n % 10000 == 0) Log.Info($"  {n:N0}/{files.Count:N0}");
+            // Прогресс ведём от ОБЩЕГО объёма и с учётом ранее нормализованных:
+            // счёт «10 000 / 403 468» выглядел так, будто этап начал всё заново.
+            if (n % 10000 == 0)
+            {
+                var overall = already + n;
+                var pct = totalInput > 0 ? 100.0 * overall / totalInput : 0;
+                Log.Info($"  {overall:N0} / {totalInput:N0} ({pct:F1}%) — в этом запуске {n:N0} из {files.Count:N0}");
+            }
         });
 
         Log.Phase("Готово:");
+        Log.Info($"  Обработано сейчас   : {done:N0}");
+        Log.Info($"  Всего нормализовано : {already + done:N0} из {totalInput:N0}");
         Log.Info($"  До улицы/дома       : {matchedStreet:N0}");
         Log.Info($"  До района/города/тер: {matchedPlace:N0}");
         Log.Info($"  Только регион       : {regionOnly:N0}");

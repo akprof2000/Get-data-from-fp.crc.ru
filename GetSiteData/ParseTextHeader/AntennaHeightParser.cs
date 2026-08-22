@@ -215,6 +215,46 @@ public static partial class AntennaHeightParser
     /// появления); null — не найдены. База отсчёта берётся из контекста строки:
     /// «земля», «кровля» или null, когда в документе не сказано.
     /// </summary>
+    /// <summary>
+    /// Диагностика (режим --diag-heights): прогоняет ПОЛНЫЙ разбор и возвращает,
+    /// какой шаблон дал каждую высоту.
+    /// </summary>
+    internal static List<(string Pattern, AntennaHeight Height)> DiagnoseHeights(string fullText)
+    {
+        _trace = [];
+        try
+        {
+            _ = Extract(fullText);
+            return _trace;
+        }
+        finally { _trace = null; }
+    }
+
+    // За списком высот в тех же строках идут ДРУГИЕ характеристики антенн —
+    // азимут, угол места, ширина диаграммы, усиление. Окно поиска значений
+    // обязано на них заканчиваться: иначе «Азимут, град.: 190/350» разбирался
+    // как пара «высота от земли / от кровли» и в данные попадали градусы
+    // (11-РЦ-09: высоты [90,3,190,350,64,15.5,2.3,8,1] вместо [90,64]).
+    [GeneratedRegex(@"(?:азимут|\bугол\b|\bуглы\b|диаграмм|град\.|градус|дБи|коэффициент\s+усилен|поляризац|мощност|диапазон\s+частот|тип\s+модуляц|наклон)", RegexOptions.IgnoreCase, 20000)]
+    private static partial Regex ForeignFieldRx();
+
+    private static string CutAtForeignField(string window)
+    {
+        var m = ForeignFieldRx().Match(window);
+        return m.Success ? window[..m.Index] : window;
+    }
+
+    // Трассировка источника каждой высоты: включается только режимом --diag-heights.
+    // Без неё по списку высот в JSON нельзя понять, какой шаблон дал ложное значение.
+    [ThreadStatic]
+    private static List<(string Pattern, AntennaHeight Height)>? _trace;
+
+    private static void AddTracedTo(List<AntennaHeight> list, string pattern, AntennaHeight h)
+    {
+        list.Add(h);
+        _trace?.Add((pattern, h));
+    }
+
     public static List<AntennaHeight>? Extract(string fullText)
     {
         var result = new List<AntennaHeight>();
@@ -222,7 +262,7 @@ public static partial class AntennaHeightParser
 
         foreach (var rx in (ReadOnlySpan<Regex>)[PodvesaRx(), UstanovkiRx(), RazmeshcheniyaRx(),
                      NaVysoteRx(), UnitBeforeColonRx(), TableFormRx(), FazovogoRx(),
-                     TochkiPodvesaRx(), UnitDashRx(), HEqualsRx(), PodvesMetkiRx(), MachtaRx(),
+                     TochkiPodvesaRx(), UnitDashRx(), HEqualsRx(), PodvesMetkiRx(),
                      NaVysotePodvesaRx(), OtPoverkhnostiRx(), MetkiPosleMRx(), HEqualsPlusRx(),
                      UstanovkiPryamRx(), UstSkobkaMRx(), UstTireRx(), UstSkobkaMetkiRx()])
         {
@@ -235,7 +275,7 @@ public static partial class AntennaHeightParser
                     // Отсекаем мусор вроде годов и координат, попавших в захват.
                     if (h is < 1 or > 500) continue;
                     if (seen.Add((h, baseKind, antenna)))
-                        result.Add(new AntennaHeight(h, baseKind, antenna, number));
+                        AddTracedTo(result, "UstSkobkaMetkiRx", new AntennaHeight(h, baseKind, antenna, number));
                 }
             }
         }
@@ -246,10 +286,10 @@ public static partial class AntennaHeightParser
             var (antenna, number) = FindAntenna(fullText, m);
             if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                 && seen.Add((gh, BaseGround, antenna)))
-                result.Add(new AntennaHeight(gh, BaseGround, antenna, number));
+                AddTracedTo(result, "ZemKrovRx", new AntennaHeight(gh, BaseGround, antenna, number));
             if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                 && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, antenna)))
-                result.Add(new AntennaHeight(rh, BaseRoof, antenna, number));
+                AddTracedTo(result, "ZemKrovRx", new AntennaHeight(rh, BaseRoof, antenna, number));
         }
 
         // Значение «от кровли» из формы «…, м - 75.0 (12.5)»: скобочная часть —
@@ -260,7 +300,7 @@ public static partial class AntennaHeightParser
             if (roofH is < 1 or > 500) continue;
             var (antenna, number) = FindAntenna(fullText, m);
             if (seen.Add((roofH, BaseRoof, antenna)))
-                result.Add(new AntennaHeight(roofH, BaseRoof, antenna, number));
+                AddTracedTo(result, "UnitDashRx", new AntennaHeight(roofH, BaseRoof, antenna, number));
         }
 
         // Перечень «по каждой антенне»: «тип, высота установки антенны от поверхности
@@ -272,7 +312,7 @@ public static partial class AntennaHeightParser
             {
                 if (!TryParse(m.Groups[1].Value, out var h) || h is < 1 or > 500) continue;
                 if (seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "ShtItemRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
 
@@ -285,10 +325,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "WideTableRowRfRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "WideTableRowRfRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -298,7 +338,7 @@ public static partial class AntennaHeightParser
             {
                 if (!TryParse(m.Groups[1].Value, out var h) || h is < 1 or > 500) continue;
                 if (seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "PlusValueRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
 
@@ -311,10 +351,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "WideTableRowRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "WideTableRowRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -325,7 +365,7 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "LastColRowRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
 
@@ -334,17 +374,17 @@ public static partial class AntennaHeightParser
         foreach (Match hm in OporPovHeaderRx().Matches(fullText))
         {
             var winEnd = Math.Min(fullText.Length, hm.Index + hm.Length + 250);
-            var window = fullText[(hm.Index + hm.Length)..winEnd];
+            var window = CutAtForeignField(fullText[(hm.Index + hm.Length)..winEnd]);
             bool gotPair = false;
             foreach (Match m in SlashPairValueRx().Matches(window))
             {
                 gotPair = true;
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "SlashPairValueRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "SlashPairValueRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
             // Без слэш-пар — одиночные значения «БС - 40 м; РРС - 40 м» (33-ВЛ, апрель).
             if (!gotPair)
@@ -353,7 +393,7 @@ public static partial class AntennaHeightParser
                 {
                     if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                         && seen.Add((h, BaseGround, null)))
-                        result.Add(new AntennaHeight(h, BaseGround, null, null));
+                        AddTracedTo(result, "OporSingleRx", new AntennaHeight(h, BaseGround, null, null));
                 }
             }
         }
@@ -366,10 +406,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "LineValueRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Success && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "LineValueRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -378,10 +418,10 @@ public static partial class AntennaHeightParser
         {
             if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                 && seen.Add((gh, BaseGround, null)))
-                result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                AddTracedTo(result, "OtUrovnyaParaRx", new AntennaHeight(gh, BaseGround, null, null));
             if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                 && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                AddTracedTo(result, "OtUrovnyaParaRx", new AntennaHeight(rh, BaseRoof, null, null));
         }
 
         // Пары высот в конце строк таблиц (63-СЦ и 10-КЦ, апрель).
@@ -391,10 +431,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "TailPairRowRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "TailPairRowRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
         if (ZemKrovTblHeaderRx().IsMatch(fullText))
@@ -403,10 +443,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "ZemKrovTblRowRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "ZemKrovTblRowRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -417,7 +457,7 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(v.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "LooseNumberRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
 
@@ -426,17 +466,17 @@ public static partial class AntennaHeightParser
         foreach (Match hm in OporIHeaderRx().Matches(fullText))
         {
             var winEnd = Math.Min(fullText.Length, hm.Index + hm.Length + 350);
-            var window = fullText[(hm.Index + hm.Length)..winEnd];
+            var window = CutAtForeignField(fullText[(hm.Index + hm.Length)..winEnd]);
             bool got = false;
             foreach (Match m in OporPairRx().Matches(window))
             {
                 got = true;
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "OporPairRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "OporPairRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
             if (!got)
             {
@@ -444,7 +484,7 @@ public static partial class AntennaHeightParser
                 {
                     if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                         && seen.Add((h, BaseGround, null)))
-                        result.Add(new AntennaHeight(h, BaseGround, null, null));
+                        AddTracedTo(result, "OporSingleRx", new AntennaHeight(h, BaseGround, null, null));
                 }
             }
         }
@@ -457,7 +497,7 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(v.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, baseKind, null)))
-                    result.Add(new AntennaHeight(h, baseKind, null, null));
+                    AddTracedTo(result, "LooseNumberRx", new AntennaHeight(h, baseKind, null, null));
             }
         }
 
@@ -469,19 +509,19 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "LetterTableRowRx", new AntennaHeight(h, BaseGround, null, null));
             }
             foreach (Match m in LetterTableRow3Rx().Matches(fullText))
             {
                 if (TryParse(m.Groups[1].Value, out var h3) && h3 is >= 1 and <= 500
                     && seen.Add((h3, BaseGround, null)))
-                    result.Add(new AntennaHeight(h3, BaseGround, null, null));
+                    AddTracedTo(result, "LetterTableRowRx", new AntennaHeight(h3, BaseGround, null, null));
             }
             foreach (Match m in LetterTableRow2Rx().Matches(fullText))
             {
                 if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "LetterTableRowRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
 
@@ -493,38 +533,38 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(v.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "LooseNumberRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
         foreach (Match m in PodvesSkobkaRx().Matches(fullText))
         {
             if (TryParse(m.Groups[1].Value, out var gh2) && gh2 is >= 1 and <= 500
                 && seen.Add((gh2, BaseGround, null)))
-                result.Add(new AntennaHeight(gh2, BaseGround, null, null));
+                AddTracedTo(result, "PodvesSkobkaRx", new AntennaHeight(gh2, BaseGround, null, null));
             if (TryParse(m.Groups[2].Value, out var rh2) && rh2 is >= 1 and <= 500
                 && seen.Add((rh2, BaseRoof, null)))
-                result.Add(new AntennaHeight(rh2, BaseRoof, null, null));
+                AddTracedTo(result, "PodvesSkobkaRx", new AntennaHeight(rh2, BaseRoof, null, null));
         }
         foreach (Match m in OtUrovnyaTireRx().Matches(fullText))
         {
             if (TryParse(m.Groups[1].Value, out var h4) && h4 is >= 1 and <= 500
                 && seen.Add((h4, BaseGround, null)))
-                result.Add(new AntennaHeight(h4, BaseGround, null, null));
+                AddTracedTo(result, "OtUrovnyaTireRx", new AntennaHeight(h4, BaseGround, null, null));
         }
         foreach (Match m in OtZemliPryamRx().Matches(fullText))
         {
             if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                 && seen.Add((h, BaseGround, null)))
-                result.Add(new AntennaHeight(h, BaseGround, null, null));
+                AddTracedTo(result, "OtZemliPryamRx", new AntennaHeight(h, BaseGround, null, null));
         }
         foreach (Match m in NadUrovnemRx().Matches(fullText))
         {
             if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                 && seen.Add((gh, BaseGround, null)))
-                result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                AddTracedTo(result, "NadUrovnemRx", new AntennaHeight(gh, BaseGround, null, null));
             if (m.Groups[2].Success && TryParse(m.Groups[2].Value, out var rh)
                 && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                AddTracedTo(result, "NadUrovnemRx", new AntennaHeight(rh, BaseRoof, null, null));
         }
 
         // «от земли - 27.0 м, … кровли … - 2.5 м», «фазовый центр антенн от земли: 24 м»,
@@ -533,33 +573,33 @@ public static partial class AntennaHeightParser
         {
             if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                 && seen.Add((gh, BaseGround, null)))
-                result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                AddTracedTo(result, "OtZemliTireRx", new AntennaHeight(gh, BaseGround, null, null));
             if (m.Groups[2].Success && TryParse(m.Groups[2].Value, out var rh)
                 && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                AddTracedTo(result, "OtZemliTireRx", new AntennaHeight(rh, BaseRoof, null, null));
         }
         foreach (Match m in FazCentrOtZemliRx().Matches(fullText))
         {
             if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                 && seen.Add((h, BaseGround, null)))
-                result.Add(new AntennaHeight(h, BaseGround, null, null));
+                AddTracedTo(result, "FazCentrOtZemliRx", new AntennaHeight(h, BaseGround, null, null));
         }
         foreach (Match m in OtPovPryamRx().Matches(fullText))
         {
             if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                 && seen.Add((h, BaseGround, null)))
-                result.Add(new AntennaHeight(h, BaseGround, null, null));
+                AddTracedTo(result, "OtPovPryamRx", new AntennaHeight(h, BaseGround, null, null));
         }
 
         // «высота установки антенн, м:» + значения после двоеточий в строках окна.
         foreach (Match hm in UstMLineHeaderRx().Matches(fullText))
         {
             var winEnd = Math.Min(fullText.Length, hm.Index + hm.Length + 300);
-            foreach (Match m in ColonValueRx().Matches(fullText[(hm.Index + hm.Length)..winEnd]))
+            foreach (Match m in ColonValueRx().Matches(CutAtForeignField(fullText[(hm.Index + hm.Length)..winEnd])))
             {
                 if (TryParse(m.Groups[1].Value, out var h) && h is >= 1 and <= 500
                     && seen.Add((h, BaseGround, null)))
-                    result.Add(new AntennaHeight(h, BaseGround, null, null));
+                    AddTracedTo(result, "ColonValueRx", new AntennaHeight(h, BaseGround, null, null));
             }
         }
 
@@ -570,10 +610,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "SemiTableRowRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "SemiTableRowRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -584,10 +624,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "DvaColRowRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                     && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "DvaColRowRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -599,10 +639,10 @@ public static partial class AntennaHeightParser
             {
                 if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                     && seen.Add((gh, BaseGround, null)))
-                    result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                    AddTracedTo(result, "TailTableRowRx", new AntennaHeight(gh, BaseGround, null, null));
                 if (TryParse(m.Groups[2].Value, out var rh) && rh is >= 1 and <= 500
                     && seen.Add((rh, BaseRoof, null)))
-                    result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                    AddTracedTo(result, "TailTableRowRx", new AntennaHeight(rh, BaseRoof, null, null));
             }
         }
 
@@ -611,10 +651,10 @@ public static partial class AntennaHeightParser
         {
             if (TryParse(m.Groups[1].Value, out var gh) && gh is >= 1 and <= 500
                 && seen.Add((gh, BaseGround, null)))
-                result.Add(new AntennaHeight(gh, BaseGround, null, null));
+                AddTracedTo(result, "KruglosutochnoRx", new AntennaHeight(gh, BaseGround, null, null));
             if (m.Groups[2].Value != "-" && TryParse(m.Groups[2].Value, out var rh)
                 && rh is >= 1 and <= 500 && seen.Add((rh, BaseRoof, null)))
-                result.Add(new AntennaHeight(rh, BaseRoof, null, null));
+                AddTracedTo(result, "KruglosutochnoRx", new AntennaHeight(rh, BaseRoof, null, null));
         }
 
         // Фоллбэк уровня документа: высоты остались без антенн, но модели в тексте
@@ -641,6 +681,36 @@ public static partial class AntennaHeightParser
                 result.Clear();
                 result.AddRange(docTypes.Select(t => one with { Antenna = t }));
             }
+        }
+
+        // Высота МАЧТЫ/столба («на столбе (высотой 23м)») — это высота опоры, а не
+        // подвеса антенны, и рядом обычно стоит настоящая отметка («на отметке 24м
+        // относительно уровня земли»). Берём её только как ЗАПАСНОЙ вариант, когда
+        // других высот в документе нет вовсе (01-РА-01: в данные попадали и 23, и 24).
+        if (result.Count == 0)
+        {
+            foreach (Match m in MachtaRx().Matches(fullText))
+            {
+                foreach (var (h, baseKind) in ParseWithBase(m.Value, m.Groups[1].Value))
+                {
+                    if (h is < 1 or > 500) continue;
+                    if (seen.Add((h, baseKind, null)))
+                        AddTracedTo(result, "MachtaRx", new AntennaHeight(h, baseKind, null, null));
+                }
+            }
+        }
+
+        // Одна и та же высота, найденная разными формулировками, давала ДВЕ записи:
+        // «высота фазового центра: 24» (база не указана) и «на отметке 24м
+        // относительно уровня земли» (база «земля»). Оставляем вариант с базой —
+        // он информативнее, а число антенн перестаёт быть завышенным.
+        for (int i = result.Count - 1; i >= 0; i--)
+        {
+            if (result[i].Base != null) continue;
+            var cur = result[i];
+            if (result.Any(o => o.Base != null && o.Height == cur.Height
+                                && (o.Antenna == cur.Antenna || cur.Antenna == null)))
+                result.RemoveAt(i);
         }
 
         return result.Count > 0 ? result : null;
@@ -674,7 +744,11 @@ public static partial class AntennaHeightParser
 
     // Значение-пара «22/-м», «26,7/- м», «,26/-» в окне после заголовка
     // (окончание «м» бывает лишь у последней пары списка «26/-,26/-,26/-м»).
-    [GeneratedRegex(@"[:\-–—,]\s*([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*/\s*(-|[0-9]{1,3}(?:[.,][0-9]{1,2})?)(?=[,;\s]|м)", RegexOptions.None, 20000)]
+    // Перед числом — разделитель, скобка или пробел, но НЕ цифра и не запятая
+    // дробной части: со старым классом «[:-–—,]» пара «61,3/-» разбиралась как
+    // «,3/-» (высота 3 м вместо 61,3), а пары после «;» не находились вовсе
+    // (11-РЦ-09: терялись 61,3 / 90 / 64).
+    [GeneratedRegex(@"(?<![0-9.,])(?<=[:\-–—,;(\s])([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*(?:м\s*)?/\s*(-|[0-9]{1,3}(?:[.,][0-9]{1,2})?)(?=[,;\s]|м)", RegexOptions.None, 20000)]
     private static partial Regex SlashPairValueRx();
 
     // Таблица с колонками «Высота подвеса относительно земли, м … относительно кровли, м»

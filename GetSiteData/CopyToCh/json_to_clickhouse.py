@@ -131,7 +131,7 @@ _DOC_RE = re.compile(r'^(.*?)\s+от\s+(\d{2})\.(\d{2})\.(\d{4})$')
 # ──────────────────────────────────────────────────────────────────────────────
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {database}.{table} (
-    `index` Int64,
+    `index` Nullable(Int64),
     document_number String,
     document_date Date,
     base_station_number Nullable(String),
@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS {database}.{table} (
     coords_conflict_km Nullable(Float64),
     coords_conflict_source Nullable(String),
     missing_fields Array(String),
-    processing_date DateTime,
+    processing_date Nullable(DateTime),
     source_file_name String,
     relative_path String,
     raw_first_lines Array(String),
@@ -179,7 +179,7 @@ SETTINGS index_granularity = 8192;
 # признак несовместимой старой схемы, таблица пересоздаётся (данные перегружаются
 # заново — источником всегда остаются JSON на диске).
 EXPECTED_COLUMNS = {
-    "index": "Int64",
+    "index": "Nullable(Int64)",
     "document_number": "String",
     "document_date": "Date",
     "base_station_number": "Nullable(String)",
@@ -211,7 +211,7 @@ EXPECTED_COLUMNS = {
     "coords_conflict_km": "Nullable(Float64)",
     "coords_conflict_source": "Nullable(String)",
     "missing_fields": "Array(String)",
-    "processing_date": "DateTime",
+    "processing_date": "Nullable(DateTime)",
     "source_file_name": "String",
     "relative_path": "String",
     "raw_first_lines": "Array(String)",
@@ -241,6 +241,14 @@ def parse_document_number_and_date(value: Optional[str], logger: logging.Logger)
         logger.warning("Некорректная дата в documentNumberAndDate: %s (%s)", value, exc)
         doc_date = None
     return doc_number, doc_date
+
+
+def doc_number_and_date_from_name(file_path: Path, logger: logging.Logger) -> Tuple[Optional[str], Optional[date]]:
+    """Номер и дата из ИМЕНИ файла — запасной источник для документов, где поле
+    documentNumberAndDate не разобралось. Имя всегда имеет вид
+    «01.РА.01.000.Т.000215.07.26 от 01.07.2026.json» (проверяется DOCUMENT_FILE_RE),
+    поэтому ключ сортировки в ClickHouse заполняется даже у неполных записей."""
+    return parse_document_number_and_date(file_path.stem, logger)
 
 
 def parse_coordinates(value: Optional[str], logger: logging.Logger) -> Tuple[Optional[float], Optional[float]]:
@@ -314,11 +322,7 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
     """Читает и парсит один JSON-файл."""
     logger.debug("Чтение файла: %s", file_path)
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as exc:
-        logger.error("JSON decode error в %s: %s", file_path, exc)
-        return None
+        raw = file_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         logger.error("Unicode error в %s: %s", file_path, exc)
         return None
@@ -326,7 +330,31 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
         logger.error("OS error чтения %s: %s", file_path, exc)
         return None
 
+    # Пустой файл — не «битый json», а недописанный результат прошлого прогона
+    # (нормализатор обрывали до атомарной записи). Такой документ нужно не
+    # чинить здесь, а переразобрать этапом NormalizeAddress: сообщаем понятно
+    # и не засоряем лог трассой JSONDecodeError.
+    if not raw.strip():
+        logger.warning("Пустой файл (нужен повторный разбор NormalizeAddress): %s", file_path)
+        return None
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("JSON decode error в %s: %s", file_path, exc)
+        return None
+
     doc_number, doc_date = parse_document_number_and_date(data.get("documentNumberAndDate"), logger)
+    # Колонки document_number/document_date входят в ключ сортировки и не Nullable:
+    # раньше документ без разобранного заголовка ронял вставку строки и терялся.
+    # Берём их из имени файла — там номер и дата есть всегда.
+    if doc_number is None or doc_date is None:
+        name_number, name_date = doc_number_and_date_from_name(file_path, logger)
+        if doc_number is None:
+            doc_number = name_number
+        if doc_date is None:
+            doc_date = name_date
+        logger.debug("Ключ восстановлен из имени файла: %s / %s", doc_number, doc_date)
     lat, lon = parse_coordinates(data.get("coordinates"), logger)
     proc_date = parse_processing_date(data.get("processingDate"), logger)
     idx = safe_int(data.get("index"), logger)
@@ -334,6 +362,9 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
     # Объект «address» пишет этап NormalizeAddress (works/OutputNormalized);
     # в необогащённых JSON его нет — все addr_*-поля остаются NULL.
     addr = data.get("address") or {}
+
+    _antennas = [h for h in (data.get("antennaHeights") or [])
+                 if isinstance(h, dict) and isinstance(h.get("height"), (int, float))]
 
     record = {
         "index": idx,
@@ -346,12 +377,15 @@ def parse_json_file(file_path: Path, logger: logging.Logger) -> Optional[Dict[st
         "operator": data.get("operator"),
         # antennaHeights — массив объектов {height, base?}; base опускается,
         # когда база отсчёта в документе не указана (в CH тогда пустая строка).
-        "antenna_heights": [h.get("height") for h in (data.get("antennaHeights") or [])],
-        "antenna_height_bases": [h.get("base") or "" for h in (data.get("antennaHeights") or [])],
+        # Элементы без числовой высоты пропускаем ЦЕЛИКОМ по всем четырём массивам:
+        # None в Array(Float64) отвергается ClickHouse, а рассинхрон длин массивов
+        # смешал бы модели и высоты разных антенн.
+        "antenna_heights": [_h["height"] for _h in _antennas],
+        "antenna_height_bases": [_h.get("base") or "" for _h in _antennas],
         # Модель/тип антенны и её номер из той же строки документа; отсутствие —
         # пустая строка / 0 (Array в CH не бывает Nullable по элементам).
-        "antenna_models": [h.get("antenna") or "" for h in (data.get("antennaHeights") or [])],
-        "antenna_numbers": [h.get("antennaNumber") or 0 for h in (data.get("antennaHeights") or [])],
+        "antenna_models": [_h.get("antenna") or "" for _h in _antennas],
+        "antenna_numbers": [_h.get("antennaNumber") or 0 for _h in _antennas],
         "addr_region": addr.get("region"),
         "addr_district": addr.get("district"),
         "addr_city": addr.get("city"),

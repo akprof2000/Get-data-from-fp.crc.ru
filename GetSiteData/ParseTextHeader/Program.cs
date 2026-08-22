@@ -81,6 +81,23 @@ public partial class Program
         // Режим диагностики: ParseTextHeader.exe --diag <файл или каталог>
         // Прогоняет адресные шаблоны по каждому файлу отдельно и печатает время
         // каждого — так виден шаблон с катастрофическим бэктрекингом.
+        if (args.Length >= 2 && args[0] == "--diag-heights")
+        {
+            foreach (var file in Directory.Exists(args[1])
+                ? Directory.EnumerateFiles(args[1], "*.txt", SearchOption.AllDirectories)
+                : [args[1]])
+            {
+                var txt = File.ReadAllText(file);
+                Log.Phase(Path.GetFileName(file));
+                foreach (var (pattern, h) in AntennaHeightParser.DiagnoseHeights(txt))
+                    Log.Info($"  {h.Height,7} | {h.Base ?? "—",-8} | {pattern,-22} | антенна: {h.Antenna ?? "—"}");
+                var final = AntennaHeightParser.Extract(txt);
+                Log.Ok("  ИТОГ: " + (final == null ? "высот нет"
+                    : string.Join("; ", final.Select(x => $"{x.Height}{(x.Base is null ? "" : " (" + x.Base + ")")}"))));
+            }
+            return;
+        }
+
         if (args.Length >= 2 && args[0] == "--diag")
         {
             RunDiagnostics(args[1]);
