@@ -200,31 +200,56 @@ public class Program
     /// </summary>
     private sealed class ZipOutput : IDisposable
     {
-        private readonly ZipArchive _zip;
-        private readonly FileStream _file;
+        // Оглавление ZIP пишется только при ЗАКРЫТИИ архива: пока том открыт, его
+        // содержимое не видно снаружи (прогресс не отследить), а обрыв процесса
+        // потерял бы весь том. Поэтому том закрывается каждые N документов —
+        // готовое остаётся читаемым, а потерять можно максимум последнюю порцию.
+        private const int EntriesPerVolume = 10_000;
+
+        private ZipArchive _zip;
+        private FileStream _file;
         private readonly Lock _lock = new();
+        private readonly string _basePath;
+        private int _inVolume;
 
-        public string Path { get; }
+        public string Path { get; private set; }
 
-        private ZipOutput(string path)
+        private ZipOutput(string path, string basePath)
         {
+            _basePath = basePath;
             Path = path;
-            _file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20);
+            _file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1 << 20);
             _zip = new ZipArchive(_file, ZipArchiveMode.Create, leaveOpen: false);
         }
 
-        /// <summary>Открывает НОВЫЙ том рядом с уже существующими.</summary>
-        public static ZipOutput CreateVolume(string basePath)
+        /// <summary>Закрывает текущий том и открывает следующий (вызывать под _lock).</summary>
+        private void RollVolume()
         {
-            if (!File.Exists(basePath)) return new ZipOutput(basePath);
+            _zip.Dispose();
+            _file.Dispose();
+            var next = NextVolumePath(_basePath);
+            _file = new FileStream(next, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1 << 20);
+            _zip = new ZipArchive(_file, ZipArchiveMode.Create, leaveOpen: false);
+            Path = next;
+            _inVolume = 0;
+            Log.Info($"Новый том архива    : {System.IO.Path.GetFileName(next)}");
+        }
+
+        private static string NextVolumePath(string basePath)
+        {
+            if (!File.Exists(basePath)) return basePath;
             var dir = System.IO.Path.GetDirectoryName(basePath)!;
             var name = System.IO.Path.GetFileNameWithoutExtension(basePath);
             for (int n = 2; ; n++)
             {
                 var candidate = System.IO.Path.Combine(dir, $"{name}.part{n}.zip");
-                if (!File.Exists(candidate)) return new ZipOutput(candidate);
+                if (!File.Exists(candidate)) return candidate;
             }
         }
+
+        /// <summary>Открывает НОВЫЙ том рядом с уже существующими.</summary>
+        public static ZipOutput CreateVolume(string basePath)
+            => new(NextVolumePath(basePath), basePath);
 
         /// <summary>Имена записей во всех томах — что уже нормализовано.</summary>
         public static HashSet<string> ReadDone(string basePath)
@@ -264,9 +289,10 @@ public class Program
             var bytes = System.Text.Encoding.UTF8.GetBytes(content);
             lock (_lock)
             {
+                if (_inVolume >= EntriesPerVolume) RollVolume();
                 var entry = _zip.CreateEntry(entryName, CompressionLevel.Optimal);
-                using var s = entry.Open();
-                s.Write(bytes, 0, bytes.Length);
+                using (var s = entry.Open()) s.Write(bytes, 0, bytes.Length);
+                _inVolume++;
             }
         }
 
@@ -275,6 +301,74 @@ public class Program
             _zip.Dispose();
             _file.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Сливает тома «<имя>.partN.zip» в единый «<имя>.zip». Записи копируются
+    /// с ПЕРЕСЖАТИЕМ (штатный ZipArchive не умеет переносить их как есть), поэтому
+    /// слияние стоит нескольких минут и временно требует места под обе копии.
+    /// Исходные тома удаляются только после успешного закрытия итогового архива —
+    /// сбой при слиянии оставляет данные нетронутыми.
+    /// </summary>
+    private static void MergeZipVolumes(string basePath)
+    {
+        var volumes = ZipOutput.EnumerateVolumes(basePath).ToList();
+        if (volumes.Count <= 1) return;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Log.Info($"Слияние томов       : {volumes.Count} шт. → {Path.GetFileName(basePath)}");
+        var merged = basePath + ".merging";
+        if (File.Exists(merged)) File.Delete(merged);
+
+        long copied = 0;
+        try
+        {
+            using (var outFile = new FileStream(merged, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20))
+            using (var outZip = new ZipArchive(outFile, ZipArchiveMode.Create, leaveOpen: false))
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var vol in volumes)
+                {
+                    using var src = ZipFile.OpenRead(vol);
+                    foreach (var entry in src.Entries)
+                    {
+                        if (entry.FullName.EndsWith('/') || !seen.Add(entry.FullName)) continue;
+                        var dst = outZip.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+                        using var input = entry.Open();
+                        using var output = dst.Open();
+                        input.CopyTo(output);
+                        copied++;
+                    }
+                }
+            }
+
+            // Итоговый архив закрыт и целостен — только теперь трогаем исходники.
+            foreach (var vol in volumes) File.Delete(vol);
+            File.Move(merged, basePath, overwrite: false);
+            Log.Ok($"Архив собран        : {Path.GetFileName(basePath)}, записей {copied:N0}, за {sw.Elapsed.TotalSeconds:F0} с");
+        }
+        catch (Exception ex)
+        {
+            // Тома целы — при следующем запуске слияние повторится.
+            Log.Warn($"Слияние томов не удалось ({ex.Message}); тома оставлены как есть.");
+            try { if (File.Exists(merged)) File.Delete(merged); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Пишет «сделано/всего» в works/.normalize-progress — отсюда пульт берёт
+    /// проценты этапа. Ошибки записи игнорируем: это справочная информация,
+    /// ронять из-за неё нормализацию нельзя.
+    /// </summary>
+    private static void WriteProgress(long done, long total)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(InputJsonPath));
+            if (dir == null) return;
+            File.WriteAllText(Path.Combine(dir, ".normalize-progress"), $"{done}/{total}");
+        }
+        catch { }
     }
 
     private static int RunNormalize()
@@ -513,6 +607,10 @@ public class Program
                 default: Interlocked.Increment(ref matchedPlace); break;
             }
             var n = Interlocked.Increment(ref done);
+            // Файл прогресса для пульта: в zip-режиме содержимое открытого тома
+            // снаружи не видно (оглавление пишется при закрытии), и проценты
+            // этапа иначе стояли бы на нуле до самого конца.
+            if (n % 500 == 0) WriteProgress(already + n, totalInput);
             // Прогресс ведём от ОБЩЕГО объёма и с учётом ранее нормализованных:
             // счёт «10 000 / 403 468» выглядел так, будто этап начал всё заново.
             if (n % 10000 == 0)
@@ -522,6 +620,16 @@ public class Program
                 Log.Info($"  {overall:N0} / {totalInput:N0} ({pct:F1}%) — в этом запуске {n:N0} из {files.Count:N0}");
             }
         });
+
+        WriteProgress(already + done, totalInput);
+
+        // Тома нужны только по ходу работы (прогресс + защита от обрыва). Этап
+        // завершился штатно — сливаем всё в ОДИН архив, как ожидается на выходе.
+        if (zipMode)
+        {
+            zipWriter?.Dispose();
+            MergeZipVolumes(OutputNormalizedPath);
+        }
 
         Log.Phase("Готово:");
         Log.Info($"  Обработано сейчас   : {done:N0}");

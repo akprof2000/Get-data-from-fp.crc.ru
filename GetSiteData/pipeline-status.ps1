@@ -13,6 +13,23 @@ New-Item -ItemType Directory -Force $works | Out-Null
 # обновляться и выглядела зависшей.
 function CountFiles($p) {
     $full = Join-Path $works $p
+    # Выход нормализатора может быть архивом (works/OutputNormalized.zip) — тогда
+    # считаем записи в нём и в его томах: оглавление читается мгновенно, без распаковки.
+    if ($p -like "*.zip") {
+        $n = 0
+        $dir = Split-Path -Parent $full
+        $base = [IO.Path]::GetFileNameWithoutExtension($full)
+        if (Test-Path $dir) {
+            foreach ($vol in @(Get-ChildItem -LiteralPath $dir -Filter "$base*.zip" -File -EA SilentlyContinue)) {
+                try {
+                    $zip = [IO.Compression.ZipFile]::OpenRead($vol.FullName)
+                    $n += $zip.Entries.Count
+                    $zip.Dispose()
+                } catch { }
+            }
+        }
+        return $n
+    }
     if (-not (Test-Path $full)) { return 0 }
     try {
         $n = 0
@@ -21,64 +38,118 @@ function CountFiles($p) {
     } catch { return 0 }
 }
 
-# Тяжёлые счётчики пересчитываем не чаще раза в 15 секунд; сам кадр (время,
-# этап, годы) рисуется каждые 2 секунды и страница остаётся «живой».
-# Пересчёт ведём по ОДНОМУ каталогу за проход: на корпусе в сотни тысяч
-# документов полный обход всех папок занимал минуты, и страница застывала —
-# казалось, что статус неверный. Теперь кадр рисуется сразу, а цифры
-# подтягиваются по кругу.
-$script:counts = @{ html = 0; txt = 0; cells = 0; other = 0; json = 0; norm = 0 }
-$script:countKeys = @(
+# Счётчики считает ОТДЕЛЬНЫЙ ПОТОК, а кадр рисуется каждые 2 секунды из готовых
+# цифр. Раньше пересчёт шёл в том же потоке: обход каталога на 700 тыс. файлов
+# занимает больше минуты, всё это время страница не обновлялась и выглядела
+# зависшей. Теперь она живая всегда, а цифры подтягиваются по мере готовности.
+Add-Type -AssemblyName System.IO.Compression.FileSystem -EA SilentlyContinue
+
+# Путь выхода нормализатора берём из конфига: там может стоять архив.
+$normPath = "OutputNormalized"
+try {
+    $cfgFile = Join-Path $root "appsettings.json"
+    if (Test-Path $cfgFile) {
+        $cfgText = (Get-Content $cfgFile -Raw -Encoding UTF8) -replace '(?m)^\s*//.*$', ''
+        $cfg = $cfgText | ConvertFrom-Json
+        if ($cfg.NormalizeAddress.OutputNormalizedPath) { $normPath = $cfg.NormalizeAddress.OutputNormalizedPath }
+    }
+} catch { }
+
+$script:counts = [hashtable]::Synchronized(@{ html = 0; txt = 0; cells = 0; other = 0; json = 0; norm = 0; ready = $false })
+$countDirs = @(
     @{ Key = "json";  Dir = "OutputJson" },
     @{ Key = "cells"; Dir = "cells" },
     @{ Key = "other"; Dir = "other" },
     @{ Key = "txt";   Dir = "documents" },
     @{ Key = "html";  Dir = "output" },
-    @{ Key = "norm";  Dir = "OutputNormalized" }
+    @{ Key = "norm";  Dir = $normPath }
 )
-$script:countIdx = 0
-$script:countsReady = $false
-function Get-Counts {
-    if (-not $script:countsReady) {
-        # Первый кадр: считаем всё сразу, чтобы страница не открылась с нулями.
-        foreach ($e in $script:countKeys) { $script:counts[$e.Key] = CountFiles $e.Dir }
-        $script:countsReady = $true
-        return $script:counts
+
+$counterRunspace = [runspacefactory]::CreateRunspace()
+$counterRunspace.Open()
+$counterRunspace.SessionStateProxy.SetVariable('counts', $script:counts)
+$counterRunspace.SessionStateProxy.SetVariable('works', $works)
+$counterRunspace.SessionStateProxy.SetVariable('countDirs', $countDirs)
+$counterRunspace.SessionStateProxy.SetVariable('flag', $flag)
+$counterPs = [powershell]::Create()
+$counterPs.Runspace = $counterRunspace
+[void]$counterPs.AddScript({
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -EA SilentlyContinue
+    function CountOne($works, $p) {
+        $full = Join-Path $works $p
+        if ($p -like "*.zip") {
+            $n = 0
+            $dir = Split-Path -Parent $full
+            $base = [IO.Path]::GetFileNameWithoutExtension($full)
+            if (Test-Path $dir) {
+                foreach ($vol in @(Get-ChildItem -LiteralPath $dir -Filter "$base*.zip" -File -EA SilentlyContinue)) {
+                    try { $zip = [IO.Compression.ZipFile]::OpenRead($vol.FullName); $n += $zip.Entries.Count; $zip.Dispose() } catch { }
+                }
+            }
+            return $n
+        }
+        if (-not (Test-Path $full)) { return 0 }
+        try {
+            $n = 0
+            foreach ($f in [System.IO.Directory]::EnumerateFiles($full, '*', [System.IO.SearchOption]::AllDirectories)) { $n++ }
+            return $n
+        } catch { return 0 }
     }
-    $e = $script:countKeys[$script:countIdx % $script:countKeys.Count]
-    $script:countIdx++
-    $script:counts[$e.Key] = CountFiles $e.Dir
-    return $script:counts
-}
+    $lastYears = [datetime]::MinValue
+    while ($true) {
+        foreach ($e in $countDirs) {
+            $counts[$e.Key] = CountOne $works $e.Dir
+            $counts["ready"] = $true
+        }
+        # Разбивка по годам — тоже тяжёлый обход (сотни тысяч текстов), и в главном
+        # потоке он замораживал страницу на минуты. Считаем здесь, раз в минуту.
+        if (((Get-Date) - $lastYears).TotalSeconds -ge 60) {
+            $txt = @{}; $html = @{}
+            # documents/<год>/<месяц>/*.txt
+            $docs = Join-Path $works "documents"
+            if (Test-Path $docs) {
+                foreach ($dir in [IO.Directory]::EnumerateDirectories($docs)) {
+                    $n = 0
+                    try { foreach ($f in [IO.Directory]::EnumerateFiles($dir, '*', [IO.SearchOption]::AllDirectories)) { $n++ } } catch { }
+                    $txt[[IO.Path]::GetFileName($dir)] = $n
+                }
+            }
+            # output/<термин>/<год>/… — год на ВТОРОМ уровне, счёт суммируется по терминам
+            $outDir = Join-Path $works "output"
+            if (Test-Path $outDir) {
+                foreach ($term in [IO.Directory]::EnumerateDirectories($outDir)) {
+                    foreach ($yd in [IO.Directory]::EnumerateDirectories($term)) {
+                        $n = 0
+                        try { foreach ($f in [IO.Directory]::EnumerateFiles($yd, '*', [IO.SearchOption]::AllDirectories)) { $n++ } } catch { }
+                        $name = [IO.Path]::GetFileName($yd)
+                        $html[$name] = [int]$html[$name] + $n
+                    }
+                }
+            }
+            $counts["yearsTxt"] = $txt
+            $counts["yearsHtml"] = $html
+            $lastYears = Get-Date
+        }
+        Start-Sleep -Milliseconds 500
+        # Конвейер закончился — считать больше нечего.
+        if (-not (Test-Path $flag)) { break }
+    }
+})
+$counterHandle = $counterPs.BeginInvoke()
+
+function Get-Counts { return $script:counts }
 
 $script:yearCache = $null
 $script:yearStamp = [datetime]::MinValue
 function Get-YearCounts {
-    if ($script:yearCache -and ((Get-Date) - $script:yearStamp).TotalSeconds -lt 60) { return $script:yearCache }
-    $txt = @{}; $html = @{}
-    $docs = Join-Path $works "documents"
-    if (Test-Path $docs) {
-        foreach ($dir in [System.IO.Directory]::EnumerateDirectories($docs)) {
-            $n = 0
-            foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, '*', [System.IO.SearchOption]::AllDirectories)) { $n++ }
-            $txt[[System.IO.Path]::GetFileName($dir)] = $n
-        }
+    # Считает фоновый поток (см. выше): обход сотен тысяч файлов в главном потоке
+    # замораживал страницу на минуты, и пульт выглядел зависшим.
+    return @{
+        Txt  = if ($script:counts["yearsTxt"])  { $script:counts["yearsTxt"] }  else { @{} }
+        Html = if ($script:counts["yearsHtml"]) { $script:counts["yearsHtml"] } else { @{} }
     }
-    $out = Join-Path $works "output"
-    if (Test-Path $out) {
-        foreach ($term in [System.IO.Directory]::EnumerateDirectories($out)) {
-            foreach ($yd in [System.IO.Directory]::EnumerateDirectories($term)) {
-                $n = 0
-                foreach ($f in [System.IO.Directory]::EnumerateFiles($yd, '*', [System.IO.SearchOption]::AllDirectories)) { $n++ }
-                $name = [System.IO.Path]::GetFileName($yd)
-                $html[$name] = [int]$html[$name] + $n
-            }
-        }
-    }
-    $script:yearCache = @{ Txt = $txt; Html = $html }
-    $script:yearStamp = Get-Date
-    return $script:yearCache
 }
+
 
 # Погодовой сбор: список лет периода + отметки о завершённых (works/.years-done)
 # и текущем (works/.year-current). При однолетнем периоде таблица не выводится.
@@ -185,7 +256,22 @@ while ($true) {
     $fParse     = Fmt $c.txt ($c.txt + $c.html) "txt"
     $fMl        = Fmt $mlDone $c.txt "текстов"
     $fExtract   = Fmt $c.json $c.cells "JSON"
-    $fNormalize = Fmt $c.norm $c.json "готово"
+    # В zip-режиме содержимое ОТКРЫТОГО тома снаружи не видно (оглавление
+    # пишется при закрытии), поэтому проценты берём из works/.normalize-progress,
+    # который ведёт сам нормализатор; файла нет — считаем по выходу, как раньше.
+    $normDone = $c.norm
+    $normTotal = $c.json
+    $progFile = Join-Path $works ".normalize-progress"
+    if (Test-Path $progFile) {
+        try {
+            $parts = ((Get-Content $progFile -Raw -EA SilentlyContinue) -replace '\s', '') -split '/'
+            if ($parts.Count -eq 2) {
+                $pd = [int]$parts[0]; $pt = [int]$parts[1]
+                if ($pt -gt 0) { $normDone = $pd; $normTotal = $pt }
+            }
+        } catch { }
+    }
+    $fNormalize = Fmt $normDone $normTotal "готово"
     $rows = @(
         @("1. Сбор с fp.crc.ru",          "collect",   $fCollect.Text,   $fCollect.Pct),
         @("2. HTML → тексты",             "parse",     $fParse.Text,     $fParse.Pct),
@@ -201,7 +287,7 @@ while ($true) {
         "parse"     { @($c.txt,   ($c.txt + $c.html)) }
         "ml"        { @($mlDone,  $c.txt) }
         "extract"   { @($c.json,  $c.cells) }
-        "normalize" { @($c.norm,  $c.json) }
+        "normalize" { @($normDone, $normTotal) }
         default     { @(0, 0) }
     }
     $etaTxt = if ($stage -eq "done") { "завершено" }
